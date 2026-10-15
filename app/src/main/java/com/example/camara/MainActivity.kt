@@ -117,23 +117,31 @@ class MainActivity : AppCompatActivity() {
             }, null)
         } catch (e: Exception) {
             Log.e(tag, "Open Exception: ${e.message}")
+            if (!isLogical0) {
+                isLogical0 = true
+                openCamera()
+            }
         }
     }
 
     private fun startPreview() {
         val surface = Surface(textureView.surfaceTexture ?: return)
-        val outputConfig = OutputConfiguration(surface).apply {
-            if (!isLogical0) setPhysicalCameraId(selectedPhysicalId)
-        }
+        // La cámara ya abierta ES la que queremos (lógica "0" o un ID físico),
+        // así que NO se debe llamar setPhysicalCameraId aquí: esa API solo es
+        // válida en sesiones creadas sobre una cámara LÓGICA. Combinarla con
+        // una cámara física abierta directamente hace que createCaptureSession
+        // lance CameraAccessException y la app crashee al abrir.
+        val outputConfig = OutputConfiguration(surface)
         val sessionConfig = SessionConfiguration(
             SessionConfiguration.SESSION_REGULAR,
             listOf(outputConfig),
             executor,
             object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(s: CameraCaptureSession) {
+                    val dev = cameraDevice ?: return
                     captureSession = s
                     try {
-                        val requestBuilder = cameraDevice!!.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+                        val requestBuilder = dev.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                             addTarget(surface)
                             set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
                             set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
@@ -153,7 +161,13 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         )
-        cameraDevice?.createCaptureSession(sessionConfig)
+        try {
+            cameraDevice?.createCaptureSession(sessionConfig)
+        } catch (e: Exception) {
+            Log.e(tag, "createCaptureSession failed: ${e.message}")
+            cameraDevice?.close()
+            cameraDevice = null
+        }
     }
 
     private fun applyManualSettings() {

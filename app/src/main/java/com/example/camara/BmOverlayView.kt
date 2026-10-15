@@ -19,7 +19,7 @@ import android.view.View
 class BmOverlayView @JvmOverloads constructor(
     context: Context,
     attrs: android.util.AttributeSet? = null
-) : View(context) {
+) : View(context, attrs) {
 
     var zebraEnabled: Boolean = false
         set(value) {
