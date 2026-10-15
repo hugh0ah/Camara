@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Blackmagic Camera palette -->
+    <color name="bm_bg">#0A0A0A</color>
+    <color name="bm_panel">#141414</color>
+    <color name="bm_panel_elevated">#1E1E1E</color>
+    <color name="bm_stroke">#2A2A2A</color>
+    <color name="bm_green">#00FF41</color>
+    <color name="bm_green_dim">#008020</color>
+    <color name="bm_green_deep">#004010</color>
+    <color name="bm_white">#FFFFFF</color>
+    <color name="bm_grey">#8A8A8A</color>
+    <color name="bm_grey_dim">#555555</color>
+    <color name="bm_red">#FF0000</color>
+    <color name="bm_red_dim">#800000</color>
+    <color name="bm_amber">#FFAE00</color>
+    <color name="bm_cyan">#00E5FF</color>
+    <color name="bm_yellow">#FFE600</color>
+    <color name="bm_blue">#0066FF</color>
+    <color name="bm_magenta">#FF00FF</color>
+    <color name="bm_black">#000000</color>
+
+    <!-- Legacy / launcher colors -->
+    <color name="purple_200">#FFBB86FC</color>
+    <color name="purple_500">#FF6200EE</color>
+    <color name="purple_700">#FF3700B3</color>
+    <color name="teal_200">#FF03DAC5</color>
+    <color name="teal_700">#FF018786</color>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+</resources>

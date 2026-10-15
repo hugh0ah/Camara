@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- BmTopBar selector IDs -->
+    <item type="id" name="bm_lens" />
+    <item type="id" name="bm_fps" />
+    <item type="id" name="bm_shtr" />
+    <item type="id" name="bm_iso" />
+    <item type="id" name="bm_wb" />
+
+    <!-- BmSelector internal IDs -->
+    <item type="id" name="bm_selector_frame" />
+    <item type="id" name="bm_selector_label" />
+
+    <!-- BmCenterDial internal IDs -->
+    <item type="id" name="bm_dial_bar" />
+
+    <!-- BmBottomBar internal IDs -->
+    <item type="id" name="bm_media" />
+    <item type="id" name="bm_record_button" />
+    <item type="id" name="bm_format" />
+    <item type="id" name="bm_meter_left" />
+    <item type="id" name="bm_meter_right" />
+</resources>

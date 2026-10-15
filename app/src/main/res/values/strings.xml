@@ -1,0 +1,13 @@
+<resources>
+    <string name="app_name">Camara</string>
+    <string name="media_free">DISCO LIBRE</string>
+    <string name="media_busy">DISCO OCUPADO</string>
+    <string name="format_default">HEVC 4K</string>
+    <string name="lens_1x">1x</string>
+    <string name="lens_tele">Tele</string>
+    <string name="lens_uw">UW</string>
+    <string name="lens_60fps">60fps</string>
+    <string name="zebra">Zebra</string>
+    <string name="false_color">False Color</string>
+    <string name="audio">Audio</string>
+</resources>

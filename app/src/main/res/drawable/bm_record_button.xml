@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Blackmagic record button states:
+      idle   -> solid red circle with thin black ring
+      armed  -> red ring (hollow) with small red center dot
+      rec    -> solid red square (recording indicator)
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_activated="true">
+        <shape android:shape="rectangle">
+            <solid android:color="@color/bm_red" />
+            <size android:width="18dp" android:height="18dp" />
+        </shape>
+    </item>
+    <item android:state_pressed="true">
+        <shape android:shape="ring">
+            <solid android:color="@color/bm_red" />
+            <size android:width="40dp" android:height="40dp" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="ring">
+            <solid android:color="@color/bm_red" />
+            <size android:width="40dp" android:height="40dp" />
+        </shape>
+    </item>
+</selector>

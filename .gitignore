@@ -1,0 +1,80 @@
+# === Gradle ===
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!**/src/main/**/build.gradle.kts
+!**/src/main/**/build.gradle
+!**/build.gradle.kts
+!**/build.gradle
+!**/settings.gradle.kts
+!**/settings.gradle
+
+# === IDEs ===
+.idea/
+*.iml
+*.ipr
+*.iws
+*.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# === Sistema ===
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# === Android Studio / IntelliJ ===
+local.properties
+*.hprof
+captures/
+.externalNativeBuild/
+.cxx/
+
+# === Keystores y firmas (¡NUNCA subir claves!) ===
+*.jks
+*.keystore
+*.key
+*.p12
+*.pfx
+keystore.properties
+signing.properties
+*.asc
+*.gpg
+
+# === Caches y outputs locales ===
+.gradle/
+app/build/
+*.apk
+*.ap_
+*.aab
+output/
+*.log
+
+# === Kotlin ===
+*.kt.bin
+.kotlin/
+
+# === Proguard / R8 ===
+proguard/
+**/mapping.txt
+**/seeds.txt
+**/usage.txt
+**/dump.txt
+
+# === Tests ===
+**/build/reports/
+**/build/outputs/
+!**/build/outputs/apk/debug/*.apk
+!**/build/outputs/bundle/debug/*.aab
+
+# === Firebase / Google Services ===
+google-services.json
+google-services.xml
+firebase_options.dart
+
+# === CI/CD locales ===
+.github/workflows/*.local.yml
+.github/workflows/*.local.yaml
