@@ -42,7 +42,7 @@ class BmOverlayView @JvmOverloads constructor(
     }
 
     private val falseColorPaint = Paint().apply {
-        style = Paint.Style_FILL
+        style = Paint.Style.FILL
         isAntiAlias = false
     }
 
@@ -69,7 +69,7 @@ class BmOverlayView @JvmOverloads constructor(
             val band = ((y / h).coerceIn(0f, 1f))
             val inZebra = band in low..high
             if (inZebra) {
-                canvas.drawRect(0f, y, w.float, (y + stripeHeight).coerceAtMost(h.float), zebraPaint)
+                canvas.drawRect(0f, y, w.toFloat(), (y + stripeHeight).coerceAtMost(h.toFloat()), zebraPaint)
             }
             y += stripeHeight
             on = !on
@@ -89,7 +89,7 @@ class BmOverlayView @JvmOverloads constructor(
         val bandH = h / bands.size
         bands.forEachIndexed { i, (_, color) ->
             falseColorPaint.color = color
-            canvas.drawRect(0f, (i * bandH).float, w.float, ((i + 1) * bandH).float, falseColorPaint)
+            canvas.drawRect(0f, (i * bandH).toFloat(), w.toFloat(), ((i + 1) * bandH).toFloat(), falseColorPaint)
         }
     }
 }

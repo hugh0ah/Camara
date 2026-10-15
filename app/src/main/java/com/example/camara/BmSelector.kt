@@ -42,7 +42,7 @@ class BmSelector @JvmOverloads constructor(
             visibility = View.GONE
             background = ContextCompat.getDrawable(context, R.drawable.bm_selector_frame)
         }
-        addView(frame, LayoutParams(MATCH_PARENT, MATCH_PARENT))
+        addView(frame, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
 
         // Condensed monospaced label
         label = TextView(context).apply {
@@ -51,10 +51,8 @@ class BmSelector @JvmOverloads constructor(
             textSize = 11f
             gravity = android.view.Gravity.CENTER
             maxLines = 1
-            ellipsize = android.text.TruncateAt.END
+            ellipsize = android.text.TextUtils.TruncateAt.END
         }
-        addView(label, LayoutParams(MATCH_PARENT, MATCH_PARENT))
+        addView(label, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
     }
-
-    fun setActive(isActive: Boolean) { active = isActive }
 }

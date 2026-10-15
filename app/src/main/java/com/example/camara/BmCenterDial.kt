@@ -20,7 +20,7 @@ import android.widget.TextView
  */
 class BmCenterDial @JvmOverloads constructor(
     context: Context,
-    attrs: android.util AttributeSet? = null
+    attrs: android.util.AttributeSet? = null
 ) : FrameLayout(context, attrs) {
 
     var mode: String = "NONE"
@@ -51,7 +51,7 @@ class BmCenterDial @JvmOverloads constructor(
             gravity = android.view.Gravity.CENTER
             setPadding(0, 0, 0, 8)
         }
-        addView(label, LayoutParams(MATCH_PARENT, WRAP_CONTENT, android.view.Gravity.CENTER))
+        addView(label, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT, android.view.Gravity.CENTER))
 
         bar = SeekBar(context).apply {
             id = R.id.bm_dial_bar
@@ -65,7 +65,7 @@ class BmCenterDial @JvmOverloads constructor(
                 override fun onStopTrackingTouch(sb: SeekBar) {}
             })
         }
-        addView(bar, LayoutParams(MATCH_PARENT, WRAP_CONTENT, android.view.Gravity.CENTER))
+        addView(bar, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT, android.view.Gravity.CENTER))
     }
 
     private fun setRange(min: Int, max: Int, progress: Int) {

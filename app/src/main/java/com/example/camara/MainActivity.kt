@@ -137,7 +137,7 @@ class MainActivity : AppCompatActivity() {
                             addTarget(surface)
                             set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
                             set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
-                            set(CaptureRequest.CONTROL_EDGE_MODE, CaptureRequest.CONTROL_EDGE_MODE_OFF)
+                            set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF)
                             set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_OFF)
                             set(CaptureRequest.SENSOR_SENSITIVITY, currentIso)
                             set(CaptureRequest.SENSOR_EXPOSURE_TIME, currentShutterNs)
@@ -160,7 +160,7 @@ class MainActivity : AppCompatActivity() {
         val b = previewRequestBuilder ?: return
         b.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_OFF)
         b.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
-        b.set(CaptureRequest.CONTROL_EDGE_MODE, CaptureRequest.CONTROL_EDGE_MODE_OFF)
+        b.set(CaptureRequest.EDGE_MODE, CaptureRequest.EDGE_MODE_OFF)
         b.set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_OFF)
         b.set(CaptureRequest.SENSOR_SENSITIVITY, currentIso)
         b.set(CaptureRequest.SENSOR_EXPOSURE_TIME, currentShutterNs)

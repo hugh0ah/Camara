@@ -25,7 +25,7 @@ class BmRecordingService : Service() {
     private var isRecording = false
     private var outputFilePath: String? = null
 
-    override fun Ibinder(): IBinder? = null
+    override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
@@ -54,7 +54,7 @@ class BmRecordingService : Service() {
                 setVideoSource(MediaRecorder.VideoSource.CAMERA)
                 setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
                 setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
-                setVideoEncoder(MediaRecorder.VideoEncoder.H265)
+                setVideoEncoder(MediaRecorder.VideoEncoder.HEVC)
                 setOutputFile(outputFilePath)
                 setVideoSize(1920, 1080)
                 setVideoFrameRate(24)

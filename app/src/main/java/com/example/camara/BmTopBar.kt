@@ -1,13 +1,9 @@
 package com.example.camara
 
 import android.content.Context
-import android.graphics.Typeface
-import android.util.Log
-import android.util.TypedValue
-import android.view.View
-import android.widget.FrameLayout
-import android.widget.TextView
-import androidx.constraintlayout.widget.ConstraintLayout
+import android.util.AttributeSet
+import android.view.Gravity
+import android.widget.LinearLayout
 
 /**
  * Blackmagic Camera top bar: LENS / FPS / SHTR / ISO / WB selectors.
@@ -17,8 +13,8 @@ import androidx.constraintlayout.widget.ConstraintLayout
  */
 class BmTopBar @JvmOverloads constructor(
     context: Context,
-    attrs: android.util.AttributeSet? = null
-) : ConstraintLayout(context, attrs) {
+    attrs: AttributeSet? = null
+) : LinearLayout(context, attrs) {
 
     val lensSelector: BmSelector
     val fpsSelector: BmSelector
@@ -26,60 +22,42 @@ class BmTopBar @JvmOverloads constructor(
     val isoSelector: BmSelector
     val wbSelector: BmSelector
 
+    private val selectors: List<BmSelector>
+
     var onSelectorTap: ((key: String) -> Unit)? = null
 
     init {
-        setPadding(0, 24, 0, 0)
-        val lp = LayoutParams(0, LayoutParams.WRAP_CONTENT)
-        val ids = intArrayOf(
-            R.id.bm_lens, R.id.bm_fps, R.id.bm_shtr, R.id.bm_iso, R.id.bm_wb
-        )
-        ids.forEach { id ->
-            val v = BmSelector(context).apply { this.id = id }
-            addView(v, lp)
-        }
+        orientation = HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(16, 40, 16, 8)
 
-        lensSelector = findViewById(R.id.bm_lens)
-        fpsSelector = findViewById(R.id.bm_fps)
-        shtrSelector = findViewById(R.id.bm_shtr)
-        isoSelector = findViewById(R.id.bm_iso)
-        wbSelector = findViewById(R.id.bm_wb)
-
-        // Chain the selectors horizontally
-        val chain = intArrayOf(
-            R.id.bm_lens, R.id.bm_fps, R.id.bm_shtr, R.id.bm_iso, R.id.bm_wb
-        )
-        chain.forEachIndexed { i, id ->
-            val left = if (i == 0) LayoutParams.PARENT_ID else chain[i - 1]
-            val right = if (i == chain.size - 1) LayoutParams.PARENT_ID else chain[i + 1]
-            ( findViewById<View>(id).layoutParams as LayoutParams).apply {
-                startToStart = left
-                endToEnd = right
-                horizontalChainStyle = ConstraintLayout.CHAIN_SPREAD
+        fun add(key: String): BmSelector {
+            val sel = BmSelector(context).apply {
+                tag = key
+                value = key
+                layoutParams = LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
+                setOnClickListener { onSelectorTap?.invoke(key) }
             }
+            addView(sel)
+            return sel
         }
 
-        bind(lensSelector, "LENS") { onSelectorTap?.invoke("LENS") }
-        bind(fpsSelector, "FPS") { onSelectorTap?.invoke("FPS") }
-        bind(shtrSelector, "SHTR") { onSelectorTap?.invoke("SHTR") }
-        bind(isoSelector, "ISO") { onSelectorTap?.invoke("ISO") }
-        bind(wbSelector, "WB") { onSelectorTap?.invoke("WB") }
-    }
+        lensSelector = add("LENS")
+        fpsSelector = add("FPS")
+        shtrSelector = add("SHTR")
+        isoSelector = add("ISO")
+        wbSelector = add("WB")
 
-    private fun bind(sel: BmSelector, key: String, tap: () -> Unit) {
-        sel.tag = key
-        sel.setOnClickListener { tap() }
+        selectors = listOf(lensSelector, fpsSelector, shtrSelector, isoSelector, wbSelector)
     }
 
     fun setActive(key: String) {
-        listOf(lensSelector, fpsSelector, shtrSelector, isoSelector, wbSelector).forEach {
-            it.setActive(it.tag == key)
-        }
+        selectors.forEach { it.active = it.tag == key }
     }
 
-    fun setLens(text: String) { lensSelector.setValue(text) }
-    fun setFps(text: String) { fpsSelector.setValue(text) }
-    fun setShtr(text: String) { shtrSelector.setValue(text) }
-    fun setIso(text: String) { isoSelector.setValue(text) }
-    fun setWb(text: String) { wbSelector.setValue(text) }
+    fun setLens(text: String) { lensSelector.value = text }
+    fun setFps(text: String) { fpsSelector.value = text }
+    fun setShtr(text: String) { shtrSelector.value = text }
+    fun setIso(text: String) { isoSelector.value = text }
+    fun setWb(text: String) { wbSelector.value = text }
 }
