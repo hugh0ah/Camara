@@ -184,6 +184,9 @@ class MainActivity : AppCompatActivity() {
     /** El HAL publica `CONTROL_ZOOM_RATIO`; si no, se omite el ajuste. */
     private var zoomRatioSupported = false
 
+    /** Escala real que aplicó el último transform del visor, para diagnóstico. */
+    private var lastTransformScale = 1f
+
     /** Evita encolar más de una actualización del repeating request a la vez. */
     private var updatePending = false
 
@@ -1067,8 +1070,18 @@ class MainActivity : AppCompatActivity() {
                     " | visor R=%.1f G=%.1f B=%.1f  R/G=%.3f B/G=%.3f".format(
                         r, g, b, r / max(0.01, g), b / max(0.01, g)
                     )
+                )            } ?: append(" | visor n/d")
+            // Geometría real del visor: con estos cuatro números se puede
+            // reproducir el mapeo búfer -> vista sin adivinar.
+            append(
+                " | geom vista=%dx%d búfer=%dx%d marco=%dx%d giro=%d escala=%.4f formato=%s".format(
+                    Locale.US,
+                    textureView.width, textureView.height,
+                    previewSize.width, previewSize.height,
+                    previewFrame.width, previewFrame.height,
+                    previewRotation, lastTransformScale, settings.formatLabel
                 )
-            } ?: append(" | visor n/d")
+            )
         }
         BmDiagnostics.write(this, line)
         Log.i(TAG_METER, line)
@@ -1923,14 +1936,28 @@ class MainActivity : AppCompatActivity() {
         val areaWidth = previewArea.width
         val available = previewArea.height
         if (areaWidth <= 0 || available <= 0) return
-        // El marco se ajusta al formato de GRABACIÓN elegido, no al búfer de
-        // previsualización: así Open Gate mide 3:4 en vertical y 4:3 en
-        // horizontal, y UHD/16:9 mide 9:16 / 16:9, siempre centrado.
-        val frameAspect = settings.frameAspect
+        // El contenedor se ajusta al ASPECTO DEL BÚFER de previsualización, que es
+        // lo único que hace que TextureView mapee los píxeles 1:1 sin estirar ni
+        // dejar bandas. Con el aspecto del formato de grabación (3:4 para Open
+        // Gate) y un búfer de 1920x1080 la imagen no cabía y aparecían franjas
+        // negras dentro del marco. El encuadre que se va a grabar se sigue
+        // indicando con las guías del overlay.
+        val bufferAspect = if (previewSize.height > 0 && previewSize.width > 0) {
+            previewSize.width.toFloat() / previewSize.height.toFloat()
+        } else {
+            16f / 9f
+        }
+        // Medido en el Vivo X300: con el contenedor en el aspecto del BÚFER la
+        // imagen lo llena exactamente (sin bandas) pero el HAL entrega el cuadro
+        // tumbado y girarlo con setTransform deja la pantalla negra. Con el
+        // aspecto del formato de GRABACIÓN la imagen sale derecha y sin deformar,
+        // a cambio de unas bandas dentro del marco. Se elige lo segundo hasta
+        // resolver el giro por otra vía.
+        val frameAspect = if (isPortraitDisplay()) 1f / settings.frameAspect else settings.frameAspect
         if (!frameAspect.isFinite() || frameAspect <= 0f) return
 
         // Ancho / alto que debe tener el contenedor en pantalla.
-        val targetRatio = if (isPortraitDisplay()) 1f / frameAspect else frameAspect
+        val targetRatio = frameAspect
         val margin = dp(7)
         var width = (areaWidth - margin * 2).coerceAtLeast(1)
         var height = (width / targetRatio).toInt()
@@ -1949,6 +1976,10 @@ class MainActivity : AppCompatActivity() {
                     "formato=${settings.formatLabel} búfer=${previewSize.width}x${previewSize.height} " +
                     "vertical=${isPortraitDisplay()}"
             )
+            // El transform depende del tamaño del contenedor: si no se recalcula
+            // aquí, la matriz queda calculada con las medidas viejas y la imagen
+            // no cubre el marco (bandas negras).
+            previewFrame.post { applyPreviewTransform() }
         }
     }
 
@@ -1966,15 +1997,18 @@ class MainActivity : AppCompatActivity() {
     /**
      * Giro del visor.
      *
-     * Medido contra la aplicación de referencia, con la misma escena y posición,
-     * en las dos orientaciones: en vertical el cuadro ya llega derecho (0°) y en
-     * horizontal hay que girarlo 270°. Es decir, el giro es el opuesto a la
-     * rotación de la pantalla; el HAL declara una orientación de sensor de 90°
-     * que no corresponde a los cuadros que entrega. El control ROTAR del raíl
-     * permite forzarlo en el momento.
+     * Fórmula estándar de Camera2 para la cámara trasera:
+     * `(orientación del sensor − rotación de la pantalla + 360) % 360`.
+     * Medido en el Vivo X300 (sensor declarado a 90°): en vertical hace falta un
+     * giro de 90° para que el cuadro salga derecho; con 0° la imagen llena el
+     * marco pero aparece tumbada. El control ROTAR del raíl permite forzarlo.
      */
     private fun effectivePreviewRotation(): Int {
         previewRotationOverride?.let { return it }
+        // Medido en el Vivo X300: con el contenedor en el aspecto del formato de
+        // grabación, este giro es el que deja la imagen derecha. El valor de la
+        // fórmula estándar (sensor − pantalla = 90) hace que TextureView dibuje
+        // negro en este dispositivo, comprobado con dos capturas.
         return (360 - displayRotationDegrees()) % 360
     }
 
@@ -2007,28 +2041,18 @@ class MainActivity : AppCompatActivity() {
         val bh = previewSize.height.toFloat()
 
         val matrix = Matrix()
-        if (vw > 0f && vh > 0f && bw > 0f && bh > 0f) {
-            if (previewRotation % 180 == 90) {
-                // Con giro, el búfer intercambia ejes: ocupa (bh x bw) en la vista.
-                // La escala es única y se toma la mayor de las dos exigencias para
-                // que la imagen CUBRA el contenedor (recorte centrado). Con
-                // `vh / bw` la imagen quedaba más estrecha que el marco y aparecían
-                // bandas negras.
-                val scale = maxOf(vw / bh, vh / bw)
-                matrix.postTranslate(vw / 2f, vh / 2f)
-                matrix.postRotate(previewRotation.toFloat())
-                matrix.postScale(scale, scale)
-                matrix.postTranslate(-bh / 2f, -bw / 2f)
-            } else {
-                // Sin giro, la escala sigue siendo ÚNICA: se cubre el contenedor
-                // con el lado más exigente y se centra (recorte, nunca estirado).
-                // Sin esto, un búfer 16:9 dentro de un contenedor 4:3 se estiraba
-                // y la imagen salía achatada en apaisado.
-                val scale = maxOf(vw / bw, vh / bh)
-                matrix.postTranslate(vw / 2f, vh / 2f)
-                matrix.postScale(scale, scale)
-                matrix.postTranslate(-bw / 2f, -bh / 2f)
-            }
+        lastTransformScale = 1f
+        // El contenedor tiene el aspecto del búfer YA GIRADO, así que basta con
+        // girar el contenido y ajustarlo con una escala uniforme: no hay recorte
+        // ni bandas. La escala es la misma por los dos lados (vw/bh == vh/bw)
+        // porque ambos aspectos coinciden.
+        if (previewRotation % 180 == 90 && vw > 0f && vh > 0f && bw > 0f && bh > 0f) {
+            val scale = vh / bw
+            lastTransformScale = scale
+            matrix.postTranslate(vw / 2f, vh / 2f)
+            matrix.postRotate(previewRotation.toFloat())
+            matrix.postScale(scale, scale)
+            matrix.postTranslate(-bh / 2f, -bw / 2f)
         }
         textureView.setTransform(matrix)
         previewMatrix.set(matrix)
