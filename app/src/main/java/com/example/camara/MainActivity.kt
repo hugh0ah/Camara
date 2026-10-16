@@ -596,20 +596,43 @@ class MainActivity : AppCompatActivity() {
         if (!enabled) {
             // Al volver a manual se conserva lo último que midió el sensor.
             Log.i(TAG_CAMERA, "AE -> manual iso=${settings.iso} shutter=${settings.shutterLabel}")
+        } else {
+            // En automático la regla graduada no tiene sentido: se cierra.
+            closeDialIfActive("SHUTTER", "ISO")
         }
         refreshBottomStates()
         updateParameterDisplay()
+        syncDialAuto()
         pushSettings()
-        Log.i(TAG_CAMERA, "Exposición automática -> $enabled")
+        Log.i(
+            TAG_CAMERA,
+            "Exposición automática -> $enabled (${if (enabled) "CONTROL_AE_MODE_ON" else "CONTROL_AE_MODE_OFF + SENSOR_*"})"
+        )
     }
 
     /** Enciende o apaga el balance de blancos automático del dispositivo. */
     private fun setAutoWb(enabled: Boolean) {
         settings.autoWb = enabled
+        if (enabled) {
+            closeDialIfActive("WB", "TINT")
+        }
         refreshBottomStates()
         updateParameterDisplay()
+        syncDialAuto()
         pushSettings()
-        Log.i(TAG_CAMERA, "Balance automático -> $enabled")
+        Log.i(
+            TAG_CAMERA,
+            "Balance automático -> $enabled (${if (enabled) "AWB_MODE_AUTO" else "AWB_MODE_OFF + COLOR_CORRECTION_GAINS"})"
+        )
+    }
+
+    /** Cierra la regla graduada si pertenece a alguno de estos parámetros. */
+    private fun closeDialIfActive(vararg keys: String) {
+        if (keys.contains(activeDialKey)) {
+            activeDialKey = ""
+            centerDial.hide()
+            topBar.setActive("")
+        }
     }
 
     private fun refreshBottomStates() {
@@ -634,6 +657,20 @@ class MainActivity : AppCompatActivity() {
             } else {
                 openDial(key)
             }
+        }
+        // Insignia «A» operativa: conmuta el automático del parámetro al tocarla
+        // y aplica el cambio al CaptureRequest en el acto.
+        topBar.onAutoTap = { key, active ->
+            when (key) {
+                "SHUTTER", "ISO" -> setAutoExposure(active)
+                "WB", "TINT" -> setAutoWb(active)
+                "FOCUS" -> {
+                    if (settings.autoFocus != active) toggleFocusMode()
+                }
+                else -> Log.i(TAG_CAMERA, "La insignia A no aplica a $key")
+            }
+            Log.i(TAG_CAMERA, "Insignia A -> $key=${if (active) "AUTO" else "MANUAL"}")
+            true
         }
     }
 
@@ -1702,7 +1739,10 @@ class MainActivity : AppCompatActivity() {
         val areaWidth = previewArea.width
         val available = previewArea.height
         if (areaWidth <= 0 || available <= 0) return
-        val frameAspect = previewSize.width.toFloat() / previewSize.height.toFloat()
+        // El marco se ajusta al formato de GRABACIÓN elegido, no al búfer de
+        // previsualización: así Open Gate mide 3:4 en vertical y 4:3 en
+        // horizontal, y UHD/16:9 mide 9:16 / 16:9, siempre centrado.
+        val frameAspect = settings.frameAspect
         if (!frameAspect.isFinite() || frameAspect <= 0f) return
 
         // Ancho / alto que debe tener el contenedor en pantalla.
@@ -1722,8 +1762,8 @@ class MainActivity : AppCompatActivity() {
             Log.i(
                 TAG_CAMERA,
                 "Visor ${width}x${height} contenedor=${"%.4f".format(Locale.US, width.toFloat() / height)} " +
-                    "sensor=${previewSize.width}x${previewSize.height} " +
-                    "búfer=${"%.4f".format(Locale.US, frameAspect)} vertical=${isPortraitDisplay()}"
+                    "formato=${settings.formatLabel} búfer=${previewSize.width}x${previewSize.height} " +
+                    "vertical=${isPortraitDisplay()}"
             )
         }
     }

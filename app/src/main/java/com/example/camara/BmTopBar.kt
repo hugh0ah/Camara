@@ -34,6 +34,19 @@ class BmTopBar @JvmOverloads constructor(
 
     var onSelectorTap: ((key: String) -> Unit)? = null
 
+    /**
+     * Toque sobre la insignia «A»: conmuta el parámetro entre automático y
+     * manual. Es el gesto que faltaba para que la insignia sea operativa y no
+     * sólo informativa.
+     */
+    var onAutoTap: ((key: String, active: Boolean) -> Unit)? = null
+
+    private fun dispatchAutoTap(key: String, active: Boolean): Boolean {
+        onAutoTap?.invoke(key, active)
+        // El toque no debe abrir además la regla graduada.
+        return true
+    }
+
     init {
         orientation = HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
@@ -46,6 +59,9 @@ class BmTopBar @JvmOverloads constructor(
                 layoutParams = LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
                 isClickable = clickable
                 if (clickable) setOnClickListener { onSelectorTap?.invoke(key) }
+                onAutoTap = { active ->
+                    dispatchAutoTap(key, active)
+                }
             }
             addView(selector)
             return selector

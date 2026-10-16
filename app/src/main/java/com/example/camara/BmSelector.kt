@@ -44,6 +44,13 @@ class BmSelector @JvmOverloads constructor(
             applyValueColor()
         }
 
+    /**
+     * Toque sobre la insignia «A». Devuelve `true` si el toque lo ha consumido la
+     * insignia, para que no abra además la regla graduada. Sin este enlace la
+     * insignia era sólo informativa y los botones AUTO parecían muertos.
+     */
+    var onAutoTap: ((active: Boolean) -> Boolean)? = null
+
     var caption: String = ""
         set(text) {
             field = text
@@ -99,6 +106,17 @@ class BmSelector @JvmOverloads constructor(
                 cornerRadius = dp(2).toFloat()
             }
             visibility = GONE
+            // La insignia conmuta el automático del parámetro: alterna entre «A»
+            // encendida (AE/AWB del ISP) y apagada (manual con ganancias propias).
+            isClickable = true
+            isFocusable = true
+            setOnClickListener {
+                onAutoTap?.invoke(!auto)?.let { handled ->
+                    if (handled) {
+                        performHapticFeedback(android.view.HapticFeedbackConstants.KEYBOARD_TAP)
+                    }
+                }
+            }
         }
         captionRow.addView(
             autoChip,
@@ -122,6 +140,36 @@ class BmSelector @JvmOverloads constructor(
             visibility = INVISIBLE
         }
         addView(underline, LayoutParams(dp(14), dp(1.5f).toInt()).apply { topMargin = dp(2) })
+
+        // Área táctil holgada: si el bloque es más bajo que 48 dp, se extiende el
+        // toque por encima y por debajo sin mover nada en pantalla. Se aplica
+        // sobre el propio bloque (el delegado se evalúa contra la extensión del
+        // hijo, así que el rectángulo ampliado es el área sensible del bloque).
+        addOnLayoutChangeListener { view, _, _, _, _, _, _, _, _ ->
+            expandTouchTarget(view)
+        }
+    }
+
+    /**
+     * Amplía el área sensible del bloque hasta 48 dp de alto como mínimo.
+     *
+     * Con la cabecera en dos filas cada parámetro mide poco más de 40 dp, así que
+     * los toques en el borde superior o inferior caían fuera y los botones
+     * parecían no responder al primer intento.
+     */
+    private fun expandTouchTarget(view: View) {
+        if (view.width <= 0 || view.height <= 0) return
+        val minimum = dp(MIN_TOUCH_DP)
+        val extraVertical = ((minimum - view.height) / 2).coerceAtLeast(0)
+        val extraHorizontal = ((minimum - view.width) / 2).coerceAtLeast(0)
+        if (extraVertical == 0 && extraHorizontal == 0) return
+        view.touchDelegate = android.view.TouchDelegate(
+            android.graphics.Rect(
+                -extraHorizontal, -extraVertical,
+                view.width + extraHorizontal, view.height + extraVertical
+            ),
+            view
+        )
     }
 
     private fun applyValueColor() {
@@ -145,6 +193,8 @@ class BmSelector @JvmOverloads constructor(
         TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, value, resources.displayMetrics)
 
     private companion object {
+        /** Área táctil mínima recomendada por las guías de Android. */
+        const val MIN_TOUCH_DP = 48
         const val COLOR_CAPTION = 0xFF9E9E9E.toInt()
         const val COLOR_IDLE = 0xFFF2F4F7.toInt()
         const val COLOR_DIM = 0xFF9AA2AC.toInt()
