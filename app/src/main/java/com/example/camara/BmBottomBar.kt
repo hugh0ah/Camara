@@ -1,79 +1,171 @@
 package com.example.camara
 
 import android.content.Context
-import android.graphics.Color
-import android.graphics.drawable.GradientDrawable
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.util.AttributeSet
+import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
-import android.widget.TextView
 
 /**
- * Blackmagic Camera bottom bar.
+ * Botón con icono vectorial y punto de estado, como los de la fila del disparador
+ * de la referencia: el punto inferior se enciende cuando la función está activa.
+ */
+class BmIconToggle @JvmOverloads constructor(
+    context: Context,
+    attrs: AttributeSet? = null
+) : FrameLayout(context, attrs) {
+
+    private val icon = ImageView(context)
+    private val dot = View(context)
+
+    var active: Boolean = false
+        set(value) {
+            field = value
+            dot.visibility = if (value) VISIBLE else INVISIBLE
+            icon.setColorFilter(if (value) 0xFFFFFFFF.toInt() else 0xFFE8ECF2.toInt())
+        }
+
+    init {
+        isClickable = true
+        isFocusable = true
+        icon.layoutParams = LayoutParams(dp(26), dp(26), Gravity.CENTER)
+        icon.scaleType = ImageView.ScaleType.FIT_CENTER
+        addView(icon)
+        dot.setBackgroundColor(0xFFFFFFFF.toInt())
+        addView(dot, LayoutParams(dp(4), dp(4), Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
+            bottomMargin = dp(1)
+        })
+        active = false
+    }
+
+    fun setIcon(resId: Int) {
+        icon.setImageResource(resId)
+    }
+
+    private fun dp(value: Int): Int =
+        TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, value.toFloat(), resources.displayMetrics).toInt()
+}
+
+/**
+ * Fila de controles del disparador, con la distribución de la referencia:
+ *
+ *   [guías] [LUT] [enfoque puntual]      ( GRABAR )      [EV A] [AF A] [pantalla limpia]
+ *
+ * Los iconos son VectorDrawable propios.
  */
 class BmBottomBar @JvmOverloads constructor(
     context: Context,
-    attrs: android.util.AttributeSet? = null
+    attrs: AttributeSet? = null
 ) : LinearLayout(context, attrs) {
 
-    val mediaText: TextView
-    val recordButton: View
-    val formatText: TextView
+    val recordButton: BmRecordButton
+    val guidesButton: BmIconToggle
+    val lutButton: BmLutBadge
+    val focusTargetButton: BmIconToggle
+    val exposureButton: BmIconToggle
+    val autoFocusButton: BmIconToggle
+    val cleanScreenButton: BmIconToggle
 
-    var onRecordLongPress: (() -> Unit)? = null
+    var onGuides: (() -> Unit)? = null
+    var onLutToggle: (() -> Unit)? = null
+    var onFocusTarget: (() -> Unit)? = null
+    var onExposureToggle: (() -> Unit)? = null
+    var onAutoFocusToggle: (() -> Unit)? = null
+    var onCleanScreen: (() -> Unit)? = null
 
     init {
         orientation = HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
-        setPadding(24, 16, 24, 16)
-        setBackgroundColor(Color.parseColor("#0A0A0A"))
+        setPadding(dp(10), dp(6), dp(10), dp(10))
+        setBackgroundColor(0xFF050E19.toInt())
 
-        mediaText = TextView(context).apply {
-            text = "MEDIA: DISCO LIBRE"
-            setTextColor(Color.parseColor("#00FF41"))
-            textSize = 12f
+        val startCluster = LinearLayout(context).apply {
+            orientation = HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
         }
-        val mediaParams = LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply {
-            gravity = Gravity.START or Gravity.CENTER_VERTICAL
+        guidesButton = BmIconToggle(context).apply {
+            setIcon(R.drawable.ic_bm_guides)
+            setOnClickListener { onGuides?.invoke() }
         }
-        addView(mediaText, mediaParams)
+        lutButton = BmLutBadge(context).apply {
+            isClickable = true
+            setOnClickListener { onLutToggle?.invoke() }
+        }
+        focusTargetButton = BmIconToggle(context).apply {
+            setIcon(R.drawable.ic_bm_focus_target)
+            setOnClickListener { onFocusTarget?.invoke() }
+        }
+        startCluster.addView(guidesButton, LayoutParams(dp(40), dp(40)))
+        startCluster.addView(lutButton, LayoutParams(dp(32), dp(22)).apply { marginStart = dp(8) })
+        startCluster.addView(
+            focusTargetButton,
+            LayoutParams(dp(40), dp(40)).apply { marginStart = dp(8) }
+        )
+        addView(startCluster, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
 
-        recordButton = View(context).apply {
-            layoutParams = LayoutParams(192, 192).apply {
-                gravity = Gravity.CENTER
-            }
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(Color.parseColor("#FF0000"))
-            }
-            setOnLongClickListener {
-                onRecordLongPress?.invoke()
-                true
-            }
-        }
-        addView(recordButton)
+        recordButton = BmRecordButton(context)
+        addView(recordButton, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
 
-        formatText = TextView(context).apply {
-            text = "HEVC 4K"
-            setTextColor(Color.parseColor("#FFFFFF"))
-            textSize = 12f
-            gravity = Gravity.END
+        val endCluster = LinearLayout(context).apply {
+            orientation = HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL or Gravity.END
         }
-        val formatParams = LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply {
-            gravity = Gravity.END or Gravity.CENTER_VERTICAL
+        exposureButton = BmIconToggle(context).apply {
+            setIcon(R.drawable.ic_bm_ev)
+            setOnClickListener { onExposureToggle?.invoke() }
         }
-        addView(formatText, formatParams)
-    }
-
-    fun setMedia(text: String, ready: Boolean) {
-        mediaText.text = text
-        mediaText.setTextColor(if (ready) Color.parseColor("#00FF41") else Color.parseColor("#FF0000"))
+        autoFocusButton = BmIconToggle(context).apply {
+            setIcon(R.drawable.ic_bm_af)
+            setOnClickListener { onAutoFocusToggle?.invoke() }
+        }
+        cleanScreenButton = BmIconToggle(context).apply {
+            setIcon(R.drawable.ic_bm_expand)
+            setOnClickListener { onCleanScreen?.invoke() }
+        }
+        endCluster.addView(exposureButton, LayoutParams(dp(40), dp(40)))
+        endCluster.addView(autoFocusButton, LayoutParams(dp(40), dp(40)).apply { marginStart = dp(6) })
+        endCluster.addView(cleanScreenButton, LayoutParams(dp(40), dp(40)).apply { marginStart = dp(6) })
+        addView(
+            endCluster,
+            LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply { gravity = Gravity.END }
+        )
     }
 
     fun setRecording(recording: Boolean) {
-        (recordButton.background as? GradientDrawable)?.setColor(
-            if (recording) Color.parseColor("#FFFFFF") else Color.parseColor("#FF0000")
-        )
+        recordButton.recording = recording
+    }
+
+    /** Refresca los puntos de estado de los botones. */
+    fun setStates(
+        monitorsActive: Boolean,
+        lutEnabled: Boolean,
+        exposureAuto: Boolean,
+        focusAuto: Boolean,
+        cleanScreen: Boolean
+    ) {
+        guidesButton.active = monitorsActive
+        lutButton.active = lutEnabled
+        exposureButton.active = exposureAuto
+        autoFocusButton.active = focusAuto
+        cleanScreenButton.active = cleanScreen
+    }
+
+    private fun dp(value: Int): Int =
+        TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, value.toFloat(), resources.displayMetrics).toInt()
+}
+
+/** Punto de estado reutilizable. */
+internal class BmDotView @JvmOverloads constructor(
+    context: Context,
+    attrs: AttributeSet? = null
+) : View(context, attrs) {
+    override fun onDraw(canvas: Canvas) {
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0xFFFFFFFF.toInt() }
+        canvas.drawCircle(width / 2f, height / 2f, minOf(width, height) / 2f, paint)
     }
 }

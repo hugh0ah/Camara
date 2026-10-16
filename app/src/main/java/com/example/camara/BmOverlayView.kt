@@ -1,49 +1,73 @@
 package com.example.camara
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.Canvas
-import android.graphics.Color
 import android.graphics.Paint
-import android.util.Log
+import android.graphics.Rect
 import android.view.View
 
 /**
- * Blackmagic-style overlay: zebra stripes and false color.
+ * Superposición de la interfaz de CineCam.
  *
- * Both modes are pure software draws over the preview. They are visual aids only
- * and never touch the Camera2 request pipeline.
+ * Dibuja las guías de encuadre y el resultado real de monitorización calculado
+ * por [BmMonitorAnalyzer] sobre los píxeles del visor: focus peaking (Sobel),
+ * zebras por umbral de IRE y falso color por luminancia. No hay bandas de
+ * prueba estáticas.
  *
- * - Zebra: 10% IRE stripes between [zebraLow, zebraHigh].
- * - False color: discrete luminance buckets mapped to BM color palette.
+ * La vista está estrictamente limitada al tamaño real del vídeo: su padre
+ * `previewFrame` recibe en MainActivity la relación de aspecto del stream
+ * (3:4 / 9:16 en vertical, 4:3 / 16:9 en horizontal) y esta vista lo llena con
+ * `match_parent`, así que las guías y la monitorización nunca sobresalen del
+ * cuadro grabado.
  */
 class BmOverlayView @JvmOverloads constructor(
     context: Context,
     attrs: android.util.AttributeSet? = null
 ) : View(context, attrs) {
 
-    var zebraEnabled: Boolean = false
-        set(value) {
-            field = value
-            invalidate()
-        }
-    var falseColorEnabled: Boolean = false
+    var guidesEnabled: Boolean = true
         set(value) {
             field = value
             invalidate()
         }
 
-    var zebraLow: Int = 75      // 0..100 IRE
-    var zebraHigh: Int = 95    // 0..100 IRE
+    private var monitorBitmap: Bitmap? = null
+    private val sourceRect = Rect()
+    private val destRect = android.graphics.RectF()
 
-    private val zebraPaint = Paint().apply {
-        color = Color.argb(90, 0x00, 0xFF, 0x41) // BM green @40%
-        style = Paint.Style.FILL
-        isAntiAlias = false
+    /**
+     * Grados que hay que girar la superposición para que coincida con el visor.
+     * El analizador entrega los píxeles en la orientación del sensor (apaisada);
+     * si el visor se muestra girado 90°, la superposición se gira igual.
+     */
+    var overlayRotation: Int = 0
+        set(value) {
+            field = ((value % 360) + 360) % 360
+            invalidate()
+        }
+
+    private val guidePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 1.5f
+        color = 0x59FFFFFF
     }
 
-    private val falseColorPaint = Paint().apply {
-        style = Paint.Style.FILL
-        isAntiAlias = false
+    private val centerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 2f
+        color = 0x8CFFFFFF.toInt()
+    }
+
+    private val monitorPaint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
+        isAntiAlias = true
+        alpha = 235
+    }
+
+    /** Bitmap de monitorización (peaking/zebras/falso color) sobre el visor. */
+    fun setMonitorBitmap(bitmap: Bitmap?) {
+        monitorBitmap = bitmap
+        invalidate()
     }
 
     override fun onDraw(canvas: Canvas) {
@@ -52,44 +76,44 @@ class BmOverlayView @JvmOverloads constructor(
         val h = height
         if (w == 0 || h == 0) return
 
-        if (falseColorEnabled) {
-            drawFalseColor(canvas, w, h)
-        } else if (zebraEnabled) {
-            drawZebra(canvas, w, h)
+        monitorBitmap?.let { bitmap ->
+            sourceRect.set(0, 0, bitmap.width, bitmap.height)
+            val cx = w / 2f
+            val cy = h / 2f
+            val rotated = overlayRotation % 180 == 90
+            val boxWidth = if (rotated) h.toFloat() else w.toFloat()
+            val boxHeight = if (rotated) w.toFloat() else h.toFloat()
+            // Misma regla que el visor: escala uniforme que cubre el marco y
+            // recorta el sobrante, para que peaking/zebras/falso color queden
+            // alineados con la imagen recortada.
+            val scale = maxOf(boxWidth / bitmap.width, boxHeight / bitmap.height)
+            val drawWidth = bitmap.width * scale
+            val drawHeight = bitmap.height * scale
+            destRect.set(cx - drawWidth / 2f, cy - drawHeight / 2f, cx + drawWidth / 2f, cy + drawHeight / 2f)
+            canvas.save()
+            if (rotated) canvas.rotate(overlayRotation.toFloat(), cx, cy)
+            canvas.drawBitmap(bitmap, sourceRect, destRect, monitorPaint)
+            canvas.restore()
         }
+
+        if (guidesEnabled) drawGuides(canvas, w, h)
     }
 
-    private fun drawZebra(canvas: Canvas, w: Int, h: Int) {
-        val stripeHeight = h / 24f
-        val low = zebraLow / 100f
-        val high = zebraHigh / 100f
-        var y = 0f
-        var on = false
-        while (y < h) {
-            val band = ((y / h).coerceIn(0f, 1f))
-            val inZebra = band in low..high
-            if (inZebra) {
-                canvas.drawRect(0f, y, w.toFloat(), (y + stripeHeight).coerceAtMost(h.toFloat()), zebraPaint)
-            }
-            y += stripeHeight
-            on = !on
-        }
-    }
+    private fun drawGuides(canvas: Canvas, w: Int, h: Int) {
+        val fw = w.toFloat()
+        val fh = h.toFloat()
 
-    private fun drawFalseColor(canvas: Canvas, w: Int, h: Int) {
-        // 6 luminance bands -> BM false color palette
-        val bands = listOf(
-            0.00f to Color.argb(150, 0x10, 0x10, 0x60), // under-exposed blue
-            0.10f to Color.argb(150, 0x00, 0x40, 0xFF), // blue
-            0.25f to Color.argb(150, 0x00, 0xFF, 0xFF), // cyan
-            0.45f to Color.argb(150, 0x00, 0xFF, 0x41), // green
-            0.70f to Color.argb(150, 0xFF, 0xAE, 0x00), // amber
-            0.90f to Color.argb(150, 0xFF, 0x00, 0x00)  // over-exposed red
-        )
-        val bandH = h / bands.size
-        bands.forEachIndexed { i, (_, color) ->
-            falseColorPaint.color = color
-            canvas.drawRect(0f, (i * bandH).toFloat(), w.toFloat(), ((i + 1) * bandH).toFloat(), falseColorPaint)
-        }
+        canvas.drawLine(fw / 3f, 0f, fw / 3f, fh, guidePaint)
+        canvas.drawLine(2f * fw / 3f, 0f, 2f * fw / 3f, fh, guidePaint)
+        canvas.drawLine(0f, fh / 3f, fw, fh / 3f, guidePaint)
+        canvas.drawLine(0f, 2f * fh / 3f, fw, 2f * fh / 3f, guidePaint)
+
+        val cross = fw * 0.035f
+        canvas.drawLine(fw / 2f - cross, fh / 2f, fw / 2f + cross, fh / 2f, centerPaint)
+        canvas.drawLine(fw / 2f, fh / 2f - cross, fw / 2f, fh / 2f + cross, centerPaint)
+
+        val insetX = fw * 0.05f
+        val insetY = fh * 0.05f
+        canvas.drawRect(insetX, insetY, fw - insetX, fh - insetY, guidePaint)
     }
 }

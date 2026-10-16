@@ -1,5 +1,7 @@
 <resources>
     <string name="app_name">Camara</string>
+    <string name="bm_stabilizer">Estabilización</string>
+    <string name="bm_media_title">Multimedia</string>
     <string name="media_free">DISCO LIBRE</string>
     <string name="media_busy">DISCO OCUPADO</string>
     <string name="format_default">HEVC 4K</string>

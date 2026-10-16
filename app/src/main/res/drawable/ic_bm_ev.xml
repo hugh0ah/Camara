@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Compensación / bloqueo de exposición: cuadrado partido en diagonal con + y − -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:strokeColor="#F2F4F7"
+        android:strokeWidth="1.4"
+        android:pathData="M5,3.5 L19,3.5 A1.5,1.5 0 0 1 20.5,5 L20.5,19 A1.5,1.5 0 0 1 19,20.5 L5,20.5 A1.5,1.5 0 0 1 3.5,19 L3.5,5 A1.5,1.5 0 0 1 5,3.5 Z" />
+    <path
+        android:strokeColor="#F2F4F7"
+        android:strokeWidth="1.4"
+        android:pathData="M4.5,19.5 L19.5,4.5" />
+    <path
+        android:strokeColor="#F2F4F7"
+        android:strokeWidth="1.4"
+        android:strokeLineCap="round"
+        android:pathData="M7.6,8.2 L11.2,8.2 M9.4,6.4 L9.4,10" />
+    <path
+        android:strokeColor="#F2F4F7"
+        android:strokeWidth="1.4"
+        android:strokeLineCap="round"
+        android:pathData="M13.4,16.2 L17,16.2" />
+</vector>

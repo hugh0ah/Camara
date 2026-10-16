@@ -20,6 +20,27 @@
     <color name="bm_magenta">#FF00FF</color>
     <color name="bm_black">#000000</color>
 
+    <!-- Paleta de interfaz de CineCam (estilo cámara de cine) -->
+    <color name="ui_text_primary">#FFFFFFFF</color>
+    <color name="ui_text_dim">#99FFFFFF</color>
+    <color name="ui_text_caption">#8A8A8A</color>
+    <color name="ui_accent">#FF00E676</color>
+    <color name="ui_rec">#FFFF3B30</color>
+    <color name="ui_divider">#33FFFFFF</color>
+    <color name="ui_guide">#59FFFFFF</color>
+    <!-- Barras sólidas de la interfaz -->
+    <color name="ui_bar">#FF0D0D0D</color>
+    <color name="ui_stroke">#FF3A3A3C</color>
+
+    <!-- Fondo y acentos medidos sobre la interfaz de Blackmagic Camera -->
+    <color name="ui_bg">#FF050E19</color>
+    <color name="ui_panel">#FF08131F</color>
+    <color name="ui_panel_stroke">#FF14263A</color>
+    <color name="ui_blue">#FF4696E9</color>
+    <color name="ui_text_bright">#FFF2F4F7</color>
+    <color name="ui_text_label">#FFD8DCE2</color>
+    <color name="ui_text_muted">#FF9AA2AC</color>
+
     <!-- Legacy / launcher colors -->
     <color name="purple_200">#FFBB86FC</color>
     <color name="purple_500">#FF6200EE</color>

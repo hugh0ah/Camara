@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- BmToolBar puede disponerse en fila (por defecto) o en columna (raíl lateral) -->
+    <declare-styleable name="BmToolBar">
+        <attr name="bmVertical" format="boolean" />
+    </declare-styleable>
+</resources>

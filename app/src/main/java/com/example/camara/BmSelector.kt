@@ -1,58 +1,154 @@
 package com.example.camara
 
 import android.content.Context
-import android.graphics.drawable.Drawable
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
+import android.text.TextUtils
+import android.util.AttributeSet
+import android.util.TypedValue
+import android.view.Gravity
 import android.view.View
-import android.widget.FrameLayout
+import android.widget.LinearLayout
 import android.widget.TextView
-import androidx.core.content.ContextCompat
 
 /**
- * Blackmagic Camera selector widget.
+ * Bloque de parámetro de la interfaz de CineCam, con la misma estructura que la
+ * barra de parámetros de Blackmagic Camera: rótulo pequeño arriba (con el
+ * indicador azul «A» cuando el parámetro está en automático) y valor grande
+ * debajo, subrayado en verde solo mientras su regla graduada está abierta.
  *
- * Renders a monospaced, condensed numeric label. When active, a thin green frame
- * surrounds the label (BM palette: #00FF41). Tapping the widget notifies the host
- * so the center dial can be re-targeted.
+ * Construido con vistas estándar de Android: no usa recursos, iconos ni fuentes
+ * empaquetadas de otra aplicación.
  */
 class BmSelector @JvmOverloads constructor(
     context: Context,
-    attrs: android.util.AttributeSet? = null
-) : FrameLayout(context, attrs) {
+    attrs: AttributeSet? = null
+) : LinearLayout(context, attrs) {
 
-    private val label: TextView
-    private val frame: View
+    private val captionView: TextView
+    private val autoChip: TextView
+    private val valueView: TextView
+    private val underline: View
+
+    /** Marca de automático (chip azul «A») que Blackmagic muestra junto al rótulo. */
+    var auto: Boolean = false
+        set(isAuto) {
+            field = isAuto
+            autoChip.visibility = if (isAuto) VISIBLE else GONE
+        }
+
+    /** Parámetros no ajustables (por ejemplo la apertura fija) se atenúan. */
+    var dimmed: Boolean = false
+        set(value) {
+            field = value
+            applyValueColor()
+        }
+
+    var caption: String = ""
+        set(text) {
+            field = text
+            captionView.text = text.uppercase()
+        }
 
     var value: String = ""
         set(text) {
             field = text
-            label.text = text
+            valueView.text = text
         }
 
     var active: Boolean = false
-        set(value) {
-            field = value
-            frame.visibility = if (value) View.VISIBLE else View.GONE
-            label.setTextColor(if (value) 0xFF00FF41.toInt() else 0xFF888888.toInt())
+        set(isActive) {
+            field = isActive
+            underline.visibility = if (isActive) VISIBLE else INVISIBLE
+            applyValueColor()
         }
 
     init {
-        // Thin green frame (hidden by default)
-        frame = View(context).apply {
-            id = R.id.bm_selector_frame
-            visibility = View.GONE
-            background = ContextCompat.getDrawable(context, R.drawable.bm_selector_frame)
-        }
-        addView(frame, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        orientation = VERTICAL
+        gravity = Gravity.CENTER
+        isClickable = true
+        isFocusable = true
+        setPadding(dp(2), dp(2), dp(2), dp(2))
 
-        // Condensed monospaced label
-        label = TextView(context).apply {
-            id = R.id.bm_selector_label
-            setTextColor(0xFF888888.toInt())
-            textSize = 11f
-            gravity = android.view.Gravity.CENTER
-            maxLines = 1
-            ellipsize = android.text.TextUtils.TruncateAt.END
+        val captionRow = LinearLayout(context).apply {
+            orientation = HORIZONTAL
+            gravity = Gravity.CENTER
         }
-        addView(label, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        captionView = TextView(context).apply {
+            textSize = 11f
+            letterSpacing = 0.02f
+            setTextColor(COLOR_CAPTION)
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            gravity = Gravity.CENTER
+            maxLines = 1
+            includeFontPadding = false
+        }
+        captionRow.addView(captionView)
+
+        autoChip = TextView(context).apply {
+            text = "A"
+            textSize = 8.5f
+            setTextColor(0xFFFFFFFF.toInt())
+            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+            gravity = Gravity.CENTER
+            includeFontPadding = false
+            maxLines = 1
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                setColor(COLOR_AUTO)
+                cornerRadius = dp(2).toFloat()
+            }
+            visibility = GONE
+        }
+        captionRow.addView(
+            autoChip,
+            LayoutParams(dp(12), dp(12)).apply { marginStart = dp(3) }
+        )
+        addView(captionRow)
+
+        valueView = TextView(context).apply {
+            textSize = 18f
+            setTextColor(COLOR_IDLE)
+            typeface = Typeface.create("sans-serif-medium", Typeface.BOLD)
+            gravity = Gravity.CENTER
+            maxLines = 1
+            includeFontPadding = false
+            ellipsize = TextUtils.TruncateAt.END
+        }
+        addView(valueView, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
+
+        underline = View(context).apply {
+            setBackgroundColor(COLOR_ACTIVE)
+            visibility = INVISIBLE
+        }
+        addView(underline, LayoutParams(dp(14), dp(1.5f).toInt()).apply { topMargin = dp(2) })
+    }
+
+    private fun applyValueColor() {
+        valueView.setTextColor(
+            when {
+                active -> COLOR_ACTIVE
+                dimmed -> COLOR_DIM
+                else -> COLOR_IDLE
+            }
+        )
+    }
+
+    private fun dp(value: Int): Int =
+        TypedValue.applyDimension(
+            TypedValue.COMPLEX_UNIT_DIP,
+            value.toFloat(),
+            resources.displayMetrics
+        ).toInt()
+
+    private fun dp(value: Float): Float =
+        TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, value, resources.displayMetrics)
+
+    private companion object {
+        const val COLOR_CAPTION = 0xFF9E9E9E.toInt()
+        const val COLOR_IDLE = 0xFFF2F4F7.toInt()
+        const val COLOR_DIM = 0xFF9AA2AC.toInt()
+        const val COLOR_ACTIVE = 0xFF00E676.toInt()
+        const val COLOR_AUTO = 0xFF2196F3.toInt()
     }
 }

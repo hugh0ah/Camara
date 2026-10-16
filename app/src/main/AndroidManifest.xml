@@ -5,6 +5,10 @@
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- API 28: MediaStore aún exige permiso de escritura; desde API 29 no hace falta -->
+    <uses-permission
+        android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
 
     <!-- Permisos obligatorios para Foreground Service en Android 14+ -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
@@ -28,7 +32,7 @@
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleInstance"
-            android:screenOrientation="fullUser"
+            android:screenOrientation="fullSensor"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|uiMode|smallestScreenSize|density"
             android:windowSoftInputMode="adjustResize" >
             <intent-filter>
@@ -37,11 +41,26 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".BmMediaActivity"
+            android:exported="false"
+            android:screenOrientation="fullSensor"
+            android:label="@string/bm_media_title" />
+
         <service
             android:name=".BmRecordingService"
             android:enabled="true"
             android:exported="false"
             android:foregroundServiceType="camera|microphone" />
+
+        <!-- Puente de verificación por adb; solo actúa en compilaciones debug -->
+        <receiver
+            android:name=".BmDebugReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.example.camara.DEBUG" />
+            </intent-filter>
+        </receiver>
 
     </application>
 

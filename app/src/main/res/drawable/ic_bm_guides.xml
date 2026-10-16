@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Guías de encuadre / monitores: marco con esquinas y círculo central -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:strokeColor="#F2F4F7"
+        android:strokeWidth="1.4"
+        android:strokeLineCap="round"
+        android:pathData="M3,3 L3,3.01" />
+    <path
+        android:strokeColor="#F2F4F7"
+        android:strokeWidth="1.4"
+        android:strokeLineCap="round"
+        android:pathData="M2.2,6.5 L2.2,4.2 A2,2 0 0 1 4.2,2.2 L6.5,2.2" />
+    <path
+        android:strokeColor="#F2F4F7"
+        android:strokeWidth="1.4"
+        android:strokeLineCap="round"
+        android:pathData="M17.5,2.2 L19.8,2.2 A2,2 0 0 1 21.8,4.2 L21.8,6.5" />
+    <path
+        android:strokeColor="#F2F4F7"
+        android:strokeWidth="1.4"
+        android:strokeLineCap="round"
+        android:pathData="M21.8,17.5 L21.8,19.8 A2,2 0 0 1 19.8,21.8 L17.5,21.8" />
+    <path
+        android:strokeColor="#F2F4F7"
+        android:strokeWidth="1.4"
+        android:strokeLineCap="round"
+        android:pathData="M6.5,21.8 L4.2,21.8 A2,2 0 0 1 2.2,19.8 L2.2,17.5" />
+    <path
+        android:strokeColor="#F2F4F7"
+        android:strokeWidth="1.4"
+        android:pathData="M9.5,12 a2.5,2.5 0 1,0 5,0 a2.5,2.5 0 1,0 -5,0" />
+    <path
+        android:strokeColor="#F2F4F7"
+        android:strokeWidth="1.2"
+        android:pathData="M4.4,12 L7,12 M17,12 L19.6,12" />
+</vector>
