@@ -162,6 +162,8 @@ class VideoRecorder(private val context: Context) {
                 rec.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
                 rec.setAudioEncodingBitRate(256_000)
                 rec.setAudioSamplingRate(48_000)
+                // Estéreo real: dos canales, que es lo que miden los dos vúmetros.
+                rec.setAudioChannels(2)
             }
             rec.setOrientationHint(orientationHint)
             rec.prepare()

@@ -72,6 +72,26 @@ class MainActivity : AppCompatActivity() {
 
         /** Tamaño de búfer de previsualización, fijo para no reiniciar la sesión. */
         val STABLE_PREVIEW_SIZE = Size(1920, 1080)
+
+        /**
+         * Resoluciones de búfer aceptadas, en orden de preferencia. Este HAL
+         * entrega 1920x1080 y 1440x1080 sin problemas; son las que evitan la
+         * pantalla en negro al crear la sesión.
+         */
+        val supportedBufferSizes = listOf(Size(1920, 1080), Size(1440, 1080))
+
+        /**
+         * Matriz de corrección de color neutra (identidad en sRGB lineal).
+         *
+         * El HAL de Vivo publica su propia `COLOR_CORRECTION_TRANSFORM`, ajustada
+         * para su AWB y con sobre-saturación. Al fijar esta identidad, la cadena
+         * de color queda sólo en manos de las ganancias RGGB que calculamos, sin
+         * que el ISP reintroduzca dominantes.
+         */
+        val NEUTRAL_COLOR_TRANSFORM: ColorSpaceTransform by lazy {
+            // Identidad 3x3 en formato numerador/denominador por filas.
+            ColorSpaceTransform(intArrayOf(1, 1, 0, 1, 0, 1, 0, 1, 1, 1, 0, 1, 0, 1, 0, 1, 1, 1))
+        }
         const val MENU_ZEBRA = 1
         const val MENU_PEAKING = 2
         const val MENU_FALSE = 3
@@ -80,6 +100,13 @@ class MainActivity : AppCompatActivity() {
 
     private val settings = BmSettings()
 
+    /**
+     * Fija la matriz de color neutra en lugar de la propietaria del ISP de Vivo.
+     *
+     * Se puede conmutar en caliente desde el puente de depuración
+     * (`cmd: "matrix:neutral:on|off"`) para comparar en el mismo encuadre.
+     */
+    private var neutralIspColor: Boolean = true
     private lateinit var textureView: TextureView
     private lateinit var topBar: BmTopBar
     private lateinit var header: BmHeaderBar
@@ -891,9 +918,10 @@ class MainActivity : AppCompatActivity() {
         val applied = lastAppliedGains
         val line = buildString {
             append(
-                "%-5s wb=%dK tint=%d autoWb=%b mode=%s | gains R=%.4f Ge=%.4f Go=%.4f B=%.4f | win=%s..%s".format(
+                "%-6s wb=%dK tint=%d autoWb=%b mode=%s matrix=%s | gains R=%.4f Ge=%.4f Go=%.4f B=%.4f | win=%s..%s".format(
                     Locale.US, origin, settings.kelvin, settings.tint, settings.autoWb,
                     if (settings.autoExposure) "AE" else "M",
+                    if (neutralIspColor) "neutra" else "ISP",
                     gains.red, gains.greenEven, gains.greenOdd, gains.blue,
                     BmSettings.gainMin, BmSettings.gainMax
                 )
@@ -1046,6 +1074,12 @@ class MainActivity : AppCompatActivity() {
                 } else {
                     dumpDiagnostics("cmd")
                 }
+            }
+            // Matriz de color: propia del ISP o neutra, para comparar en vivo.
+            "matrix" -> {
+                neutralIspColor = parts.getOrNull(2)?.equals("on", ignoreCase = true) == true
+                pushSettings()
+                dumpDiagnostics("matrix")
             }
             "rail" -> setRailOpen(parts.getOrNull(1)?.equals("on", ignoreCase = true) == true)
             // Bloqueo de orientación (puente de depuración): orient:portrait|landscape|auto
@@ -1417,10 +1451,22 @@ class MainActivity : AppCompatActivity() {
         // calculadas con Planck + tinte.
         if (settings.autoWb) {
             builder.set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
+            // AWB automático: también se fija la matriz neutra, para que el ISP
+            // resuelva el punto blanco sin reaplicar su saturación propietaria.
+            if (neutralIspColor) {
+                builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX)
+                builder.set(CaptureRequest.COLOR_CORRECTION_TRANSFORM, NEUTRAL_COLOR_TRANSFORM)
+            }
         } else {
             builder.set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_OFF)
             builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX)
             builder.set(CaptureRequest.COLOR_CORRECTION_GAINS, settings.rggbGains())
+            // Matriz de corrección neutra (identidad): anula la matriz propietaria
+            // del ISP de Vivo y su sobresaturación, que es la que reintroducía la
+            // dominante verde sobre las ganancias manuales.
+            if (neutralIspColor) {
+                builder.set(CaptureRequest.COLOR_CORRECTION_TRANSFORM, NEUTRAL_COLOR_TRANSFORM)
+            }
         }
         // Enfoque: AF continuo por defecto (nítido sin tocar nada); MF manual con
         // distancia de foco. El tap-to-focus usa AF_MODE_AUTO + disparo puntual.
@@ -1612,23 +1658,28 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Tamaño de previsualización para todos los formatos: 1920x1080 (16:9).
+     * Tamaño de búfer del visor, elegido entre las resoluciones que MediaTek
+     * publica para este sensor: 1920x1080 y, si no está, 1440x1080 (4:3 con
+     * recorte), que son las que este HAL entrega sin problemas.
      *
-     * Un único tamaño de búfer estable —el más ligero que soportan todos los
-     * formatos— evita tener que cambiar `setDefaultBufferSize` con la sesión de
-     * cámara viva, que en MediaTek invalida el búfer del productor y deja el
-     * visor en negro. La geometría la fija exclusivamente [applyPreviewAspect].
+     * Es un tamaño ÚNICO y estable: no cambia con la calidad elegida. Cambiar
+     * `setDefaultBufferSize` con la sesión viva invalida el búfer del productor
+     * en MediaTek y deja el visor en negro; la geometría la fija exclusivamente
+     * [applyPreviewAspect] sobre el contenedor, no el búfer.
      */
     private fun choosePreviewSize(quality: BmSettings.Quality): Size {
         val map = characteristics?.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
         val sizes = map?.getOutputSizes(SurfaceTexture::class.java)?.toList().orEmpty()
         if (sizes.isEmpty()) return STABLE_PREVIEW_SIZE
-        val supported = sizes.any { it.width == STABLE_PREVIEW_SIZE.width && it.height == STABLE_PREVIEW_SIZE.height }
-        if (supported) return STABLE_PREVIEW_SIZE
+        supportedBufferSizes.firstOrNull { candidate ->
+            sizes.any { it.width == candidate.width && it.height == candidate.height }
+        }?.let { return it }
+        // Último recurso: el mayor 16:9 disponible, o el mayor a secas.
         val sameAspect = sizes.filter {
             kotlin.math.abs(it.width.toFloat() / it.height - 16f / 9f) < 0.02f
         }
-        return (sameAspect.maxByOrNull { it.width.toLong() * it.height } ?: sizes.maxByOrNull { it.width.toLong() * it.height })
+        return (sameAspect.maxByOrNull { it.width.toLong() * it.height }
+            ?: sizes.maxByOrNull { it.width.toLong() * it.height })
             ?: STABLE_PREVIEW_SIZE
     }
 
