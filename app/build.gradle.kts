@@ -14,8 +14,8 @@ android {
         applicationId = "com.example.camara"
         minSdk = 28
         targetSdk = 36
-        versionCode = 13
-        versionName = "2.3.0"
+        versionCode = 14
+        versionName = "2.3.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

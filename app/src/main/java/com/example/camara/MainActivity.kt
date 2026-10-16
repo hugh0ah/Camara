@@ -190,6 +190,11 @@ class MainActivity : AppCompatActivity() {
     /** Escala real que aplicó el último transform del visor, para diagnóstico. */
     private var lastTransformScale = 1f
 
+    /** Estado de enfoque confirmado por el sensor, para el diagnóstico. */
+    private var lastAfMode: Int? = null
+    private var lastAfState: Int? = null
+    private var lastFocusDistance: Float? = null
+
     /** Evita encolar más de una actualización del repeating request a la vez. */
     private var updatePending = false
 
@@ -1099,13 +1104,45 @@ class MainActivity : AppCompatActivity() {
                     previewRotation, lastTransformScale, settings.formatLabel
                 )
             )
+            // Enfoque confirmado por el sensor: modo, estado y distancia reales.
+            append(
+                " | af modo=%s estado=%s distancia=%s".format(
+                    Locale.US,
+                    afModeName(lastAfMode), afStateName(lastAfState),
+                    lastFocusDistance?.let { "%.3f".format(Locale.US, it) } ?: "n/d"
+                )
+            )
         }
         BmDiagnostics.write(this, line)
         Log.i(TAG_METER, line)
     }
 
-    /** Media de un histograma de 256 niveles, para medir la dominante de color. */
-    private fun meanChannel(histogram: IntArray): Double {
+    /** Nombre legible del modo de enfoque confirmado por el sensor. */
+    private fun afModeName(mode: Int?): String = when (mode) {
+        CaptureResult.CONTROL_AF_MODE_OFF -> "OFF"
+        CaptureResult.CONTROL_AF_MODE_AUTO -> "AUTO"
+        CaptureResult.CONTROL_AF_MODE_MACRO -> "MACRO"
+        CaptureResult.CONTROL_AF_MODE_CONTINUOUS_VIDEO -> "CONTINUO_VIDEO"
+        CaptureResult.CONTROL_AF_MODE_CONTINUOUS_PICTURE -> "CONTINUO_FOTO"
+        CaptureResult.CONTROL_AF_MODE_EDOF -> "EDOF"
+        null -> "n/d"
+        else -> "modo$mode"
+    }
+
+    /** Nombre legible del estado de enfoque confirmado por el sensor. */
+    private fun afStateName(state: Int?): String = when (state) {
+        CaptureResult.CONTROL_AF_STATE_INACTIVE -> "INACTIVO"
+        CaptureResult.CONTROL_AF_STATE_PASSIVE_SCAN -> "BARRIDO_PASIVO"
+        CaptureResult.CONTROL_AF_STATE_PASSIVE_FOCUSED -> "ENFOCADO_PASIVO"
+        CaptureResult.CONTROL_AF_STATE_ACTIVE_SCAN -> "BARRIDO_ACTIVO"
+        CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED -> "ENFOCADO_BLOQUEADO"
+        CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED -> "NO_ENFOCADO_BLOQUEADO"
+        CaptureResult.CONTROL_AF_STATE_PASSIVE_UNFOCUSED -> "SIN_ENFOCAR_PASIVO"
+        null -> "n/d"
+        else -> "estado$state"
+    }
+
+    /** Media de un histograma de 256 niveles, para medir la dominante de color. */    private fun meanChannel(histogram: IntArray): Double {
         var total = 0L
         var weighted = 0L
         histogram.forEachIndexed { level, count ->
@@ -1570,6 +1607,11 @@ class MainActivity : AppCompatActivity() {
             val appliedFocus = result.get(CaptureResult.LENS_FOCUS_DISTANCE)
             val appliedAfMode = result.get(CaptureResult.CONTROL_AF_MODE)
             val appliedAfState = result.get(CaptureResult.CONTROL_AF_STATE)
+            // Se guardan para el diagnóstico: es la evidencia de que el sensor
+            // aceptó el enfoque y en qué estado quedó.
+            lastAfMode = appliedAfMode
+            lastAfState = appliedAfState
+            lastFocusDistance = appliedFocus
             val now = System.currentTimeMillis()
             // En automático, los valores que muestra la barra son los que el
             // propio sensor está aplicando, leídos del resultado de captura.
