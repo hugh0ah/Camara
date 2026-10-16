@@ -67,6 +67,9 @@ class MainActivity : AppCompatActivity() {
         const val PHYSICAL_TELE = "3"
         const val PHYSICAL_UW = "4"
         const val FOUR_K_BITRATE = 120_000_000
+
+        /** Tamaño de búfer de previsualización, fijo para no reiniciar la sesión. */
+        val STABLE_PREVIEW_SIZE = Size(1920, 1080)
         const val MENU_ZEBRA = 1
         const val MENU_PEAKING = 2
         const val MENU_FALSE = 3
@@ -128,10 +131,9 @@ class MainActivity : AppCompatActivity() {
                 }
                 if (rotation == deviceRotation) return
                 deviceRotation = rotation
-                previewArea.post {
-                    applyPreviewAspect()
-                    applyPreviewTransform()
-                }
+                // Sólo el giro: no se relayouta el contenedor mientras la cámara
+                // está renderizando.
+                previewArea.post { applyPreviewTransform() }
             }
         }
     }
@@ -263,6 +265,8 @@ class MainActivity : AppCompatActivity() {
             override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
                 surface.setDefaultBufferSize(previewSize.width, previewSize.height)
                 previewArea.post { applyPreviewAspect() }
+                // El visor se abre sin esperar al layout: en cuanto hay superficie
+                // se arranca la cámara, y el contenedor se dimensiona en paralelo.
                 openCamera()
             }
 
@@ -380,7 +384,6 @@ class MainActivity : AppCompatActivity() {
                 )
                 previewArea.post {
                     applyPreviewAspect()
-                    applyPreviewTransform()
                 }
             }
             insets
@@ -839,10 +842,9 @@ class MainActivity : AppCompatActivity() {
                 }
                 toolRail.setActive("ROTATE", false)
                 Log.i(TAG_CAMERA, "Giro del visor -> ${previewRotationOverride ?: "automático"}")
-                previewArea.post {
-                    applyPreviewAspect()
-                    applyPreviewTransform()
-                }
+                // Cambiar de giro recalcula el lienzo de la superposición y la
+                // matriz del visor, sin tocar el tamaño del contenedor.
+                previewArea.post { applyPreviewTransform() }
             }
         }
         if (settings.peaking || settings.zebra || settings.falseColor || settings.histogram) analyzer?.start()
@@ -1092,7 +1094,6 @@ class MainActivity : AppCompatActivity() {
                         chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
                     // El visor arranca con la relación de aspecto de la calidad activa.
                     previewSize = choosePreviewSize(settings.quality)
-                    textureView.surfaceTexture?.setDefaultBufferSize(previewSize.width, previewSize.height)
                     analyzer?.configure(previewSize.width, previewSize.height)
                     previewArea.post {
                         applyPreviewAspect()
@@ -1137,7 +1138,16 @@ class MainActivity : AppCompatActivity() {
 
     private fun createSession(recorderSurface: Surface?) {
         val device = cameraDevice ?: return
-        val texture = textureView.surfaceTexture ?: return
+        // Nunca se crea una sesión sin superficie lista: en MediaTek eso deja el
+        // visor en negro hasta reiniciar la cámara.
+        if (!textureView.isAvailable) {
+            Log.w(TAG_CAMERA, "createSession aplazado: la superficie del visor aún no está disponible")
+            return
+        }
+        val texture = textureView.surfaceTexture ?: run {
+            Log.w(TAG_CAMERA, "createSession aplazado: surfaceTexture nulo")
+            return
+        }
         val surface = Surface(texture)
         previewSurface = surface
 
@@ -1453,8 +1463,9 @@ class MainActivity : AppCompatActivity() {
     private fun setQuality(quality: BmSettings.Quality) {
         if (isRecording || quality == settings.quality) return
         settings.quality = quality
-        previewSize = choosePreviewSize(quality)
-        textureView.surfaceTexture?.setDefaultBufferSize(previewSize.width, previewSize.height)
+        val previous = previewSize
+        val next = choosePreviewSize(quality)
+        previewSize = next
         analyzer?.configure(previewSize.width, previewSize.height)
         val (badge, subBadge) = settings.formatBadge
         header.setFormat(badge, subBadge)
@@ -1463,30 +1474,37 @@ class MainActivity : AppCompatActivity() {
             "CALIDAD -> ${settings.formatLabel} (${quality.width}x${quality.height}) " +
                 "preview ${previewSize.width}x${previewSize.height} caudal ${settings.targetBitrate / 1_000_000} Mbps"
         )
-        previewArea.post {
-            applyPreviewAspect()
-            applyPreviewTransform()
+        // Sólo se ajusta la geometría del contenedor: la superficie y la sesión de
+        // cámara siguen vivas, así que el pipeline de MediaTek no se reinicia.
+        previewArea.post { applyPreviewAspect() }
+        if (previous != next) {
+            // El búfer no puede cambiar con la sesión en marcha: se rehace la sesión
+            // de forma ordenada, con la superficie ya disponible.
+            Log.i(TAG_CAMERA, "Búfer de previsión ${previous} -> $next: se recrea la sesión")
+            textureView.surfaceTexture?.let { it.setDefaultBufferSize(next.width, next.height) }
+            if (textureView.isAvailable) createSession(null)
         }
-        createSession(null)
     }
 
     /**
-     * Tamaño de previsualización soportado con la misma relación de aspecto que el
-     * formato elegido (de él depende la proporción real del visor).
+     * Tamaño de previsualización para todos los formatos: 1920x1080 (16:9).
+     *
+     * Un único tamaño de búfer estable —el más ligero que soportan todos los
+     * formatos— evita tener que cambiar `setDefaultBufferSize` con la sesión de
+     * cámara viva, que en MediaTek invalida el búfer del productor y deja el
+     * visor en negro. La geometría la fija exclusivamente [applyPreviewAspect].
      */
     private fun choosePreviewSize(quality: BmSettings.Quality): Size {
         val map = characteristics?.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
         val sizes = map?.getOutputSizes(SurfaceTexture::class.java)?.toList().orEmpty()
-        if (sizes.isEmpty()) return Size(quality.previewWidth, quality.previewHeight)
-        val targetAspect = quality.width.toFloat() / quality.height
+        if (sizes.isEmpty()) return STABLE_PREVIEW_SIZE
+        val supported = sizes.any { it.width == STABLE_PREVIEW_SIZE.width && it.height == STABLE_PREVIEW_SIZE.height }
+        if (supported) return STABLE_PREVIEW_SIZE
         val sameAspect = sizes.filter {
-            kotlin.math.abs(it.width.toFloat() / it.height - targetAspect) < 0.02f
+            kotlin.math.abs(it.width.toFloat() / it.height - 16f / 9f) < 0.02f
         }
-        val pool = sameAspect.ifEmpty { sizes.toList() }
-        return pool.minByOrNull {
-            kotlin.math.abs(it.width - quality.previewWidth).toLong() * 1000 +
-                kotlin.math.abs(it.height - quality.previewHeight)
-        } ?: Size(quality.previewWidth, quality.previewHeight)
+        return (sameAspect.maxByOrNull { it.width.toLong() * it.height } ?: sizes.maxByOrNull { it.width.toLong() * it.height })
+            ?: STABLE_PREVIEW_SIZE
     }
 
     /**
@@ -1568,35 +1586,29 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Transformación del visor: SOLO giro, nunca escala.
+     * Transformación del visor: única y sin reintentos.
      *
-     * El contenedor ya tiene exactamente la proporción de los píxeles del búfer
-     * (ver [applyPreviewAspect]), así que `TextureView` mapea búfer -> vista de
-     * forma natural y la matriz no acumula factores de estirado. Cuando el sensor
-     * viene girado 90° (caso habitual en Android) el búfer apaisado tiene que
-     * rotarse para llenar el contenedor vertical: esa rotación, y nada más, es lo
-     * que se aplica aquí. Con el contenedor bien dimensionado, girar 90° equivale
-     * a un intercambio de ejes sin deformación.
+     * No toca `layoutParams` ni se reaplica sola, así que no puede entrar en un
+     * bucle de relayout que invalide la superficie mientras Camera2 renderiza
+     * (ese bucle congelaba el pipeline en MediaTek).
+     *
+     * El contenedor `previewFrame` ya tiene la proporción exacta de los píxeles
+     * del búfer, así que `TextureView` mapea búfer -> vista sin estirar. Lo único
+     * que no puede resolverse con el tamaño es la orientación: el búfer del
+     * sensor llega apaisado y hay que girarlo para que llene el contenedor
+     * vertical. Ese giro es un intercambio de ejes (escala uniforme, sin
+     * deformación) y no altera las dimensiones de la vista.
      */
     private fun applyPreviewTransform() {
         previewRotation = effectivePreviewRotation()
-        val rotated = previewRotation % 180 == 90
-
-        // Con la proporción del contenedor igual a la del búfer ya girado, la
-        // geometría encaja sin escalar: vw/vh == bh/bw. Si el layout todavía no
-        // se ha resuelto con esas dimensiones se corrige y se reintenta, de modo
-        // que nunca quede un estirado visible en pantalla.
         val vw = textureView.width.toFloat()
         val vh = textureView.height.toFloat()
         val bw = previewSize.width.toFloat()
         val bh = previewSize.height.toFloat()
-        val laidOut = vw > 0f && vh > 0f && bw > 0f && bh > 0f
-        val fits = !laidOut || kotlin.math.abs(vw * bw - vh * bh) < 1f
 
         val matrix = Matrix()
-        if (rotated && laidOut) {
-            // Ejemplo búfer 1920x1080 en vista 405x720: T(202.5, 0) · R(90) · S(0.375)
-            // lleva el búfer exactamente sobre el contenedor. Sin estirar.
+        if (previewRotation % 180 == 90 && vw > 0f && vh > 0f && bw > 0f && bh > 0f) {
+            // Búfer 1920x1080 en vista 405x720: T(202.5, 0) · R(90) · S(0.375)
             val scale = vh / bw
             matrix.postTranslate(vw / 2f, vh / 2f)
             matrix.postRotate(previewRotation.toFloat())
@@ -1609,27 +1621,8 @@ class MainActivity : AppCompatActivity() {
         Log.i(
             TAG_CAMERA,
             "Visor ${vw.toInt()}x${vh.toInt()} buffer ${bw.toInt()}x${bh.toInt()} giro=$previewRotation " +
-                "encaja=$fits sensor=$sensorOrientation físico=$deviceRotation " +
-                "pantalla=${display?.rotation ?: -1}"
+                "sensor=$sensorOrientation físico=$deviceRotation pantalla=${display?.rotation ?: -1}"
         )
-        if (!fits) {
-            val frameAspect = bw / bh
-            val targetRatio = if (isPortraitDisplay()) 1f / frameAspect else frameAspect
-            val width = (vw * targetRatio).toInt().coerceAtLeast(1)
-            val height = (vw / targetRatio).toInt().coerceAtLeast(1)
-            (previewFrame.layoutParams as? FrameLayout.LayoutParams)?.let {
-                if (it.width != width || it.height != height) {
-                    it.width = width
-                    it.height = height
-                    previewFrame.layoutParams = it
-                    Log.w(
-                        TAG_CAMERA,
-                        "Contenedor corregido en la matriz: ${width}x${height} (giro=$previewRotation)"
-                    )
-                    textureView.post { applyPreviewTransform() }
-                }
-            }
-        }
     }
 
     /**
