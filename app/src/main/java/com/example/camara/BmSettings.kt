@@ -98,6 +98,22 @@ class BmSettings {
     var videoStabilization: Boolean = false
     var overlaysVisible: Boolean = true
 
+    // --- Bloqueos y óptica (portado de OpenCamera, CameraController2) ---
+    /** `CONTROL_AE_LOCK_ON`: congela la exposición que resolvió el AE. */
+    var aeLock: Boolean = false
+
+    /** `CONTROL_AWB_LOCK_ON`: congela el balance de blancos automático. */
+    var awbLock: Boolean = false
+
+    /** `LENS_OPTICAL_STABILIZATION_MODE_ON` además de la estabilización de vídeo. */
+    var opticalStabilization: Boolean = false
+
+    /** `CONTROL_ZOOM_RATIO` suave; 1.0 equivale a sin recorte. */
+    var zoomRatio: Float = 1.0f
+
+    /** Perfil de curva de tonos del botón LOG (portado de FreeDcam). */
+    var toneProfile: ToneProfile = ToneProfile.LOG
+
     val shutterLabel: String
         get() {
             val denominator = max(1L, 1_000_000_000L / max(1L, shutterNs))
@@ -120,32 +136,28 @@ class BmSettings {
     }
 
     /**
-     * Ganancias RGGB para una temperatura de color y un tinte, en paridad con
-     * Blackmagic Camera.
+     * Ganancias RGGB para una temperatura de color y un tinte.
      *
-     * 1. Kelvin -> RGB con la aproximación de Planck (Kim et al. / Kang et al.),
-     *    válida de 2500 K a 10000 K, normalizada a G = 1.
-     * 2. Ganancias = inverso de esa respuesta, normalizadas a G = 1 para no
-     *    alterar la exposición: sólo se corrige el punto blanco.
-     * 3. Tinte en [-50, +50]: positivo empuja a magenta bajando el verde
-     *    (`gFactor = 1 - tint/100`), negativo empuja a verde bajando R y B. Con
-     *    G siempre a 1.0 no se sobrepondera el canal verde (G_even = G_odd), que
-     *    era el origen de la dominante verdosa.
-     * 4. Los cuatro valores se recortan al rango real que declara el sensor en
-     *    `COLOR_CORRECTION_GAINS` ([gainMin], [gainMax]).
+     * Portado de FreeDcam:
+     *  1. Respuesta del iluminante desde la tabla `wbct_lookup` de FreeDcam
+     *     (interpolada) y, fuera de su rango, la aproximacion de Planck.
+     *  2. `WbHandler.getRGBToDouble`: `(2/255) * color + 1`, con el suelo
+     *     `MINCAP = 1.0`. El verde se divide por 2 porque el patron RGGB lleva
+     *     dos canales verdes.
+     *  3. Eje de tinte sobre los canales de color, con el verde como referencia:
+     *     positivo (magenta) sube R y B; negativo (verde) los baja.
+     *  4. Todos los canales quedan en 1.0 o por encima, que es la convencion de
+     *     FreeDcam y lo que recomienda Camera2 (por debajo de 1.0 aparecen
+     *     artefactos de color), conservando las relaciones R:G:B.
      */
     fun rggbGains(): RggbChannelVector {
         val (whiteR, whiteG, whiteB) = kelvinToRgb(kelvin)
-        // 1) Inverso de la respuesta del iluminante, con el verde como referencia.
-        val safeG = max(0.02f, whiteG)
-        var red = safeG / max(0.02f, whiteR)
-        var green = 1.0f
-        var blue = safeG / max(0.02f, whiteB)
 
-        // 2) Eje de tinte sobre las ganancias de color (el verde es la
-        // referencia y no se toca, como en FreeDcam):
-        //   - Positivo (magenta): se SUBEN R y B, que es lo que quita verde.
-        //   - Negativo (verde): se BAJAN R y B, que es lo que deja verde.
+        var red = (2.0f / 255.0f) * whiteR + 1.0f
+        var green = ((2.0f / 255.0f) * whiteG + 1.0f) / 2.0f
+        var blue = (2.0f / 255.0f) * whiteB + 1.0f
+        if (green < MIN_GAIN_CAP) green = MIN_GAIN_CAP
+
         val t = tint.coerceIn(TINT_MIN, TINT_MAX) / 100f
         if (t > 0f) {
             red *= (1f + 0.8f * t)
@@ -155,10 +167,6 @@ class BmSettings {
             blue *= (1f + t)
         }
 
-        // 3) Todos los canales >= 1.0. Camera2 documenta que las ganancias por
-        // debajo de 1.0 producen artefactos de color, y es la convención que usa
-        // FreeDcam (`MINCAP = 1.0`): se reescala el vector para que el canal más
-        // bajo quede exactamente en 1.0 y se conserven las relaciones R:G:B.
         val floor = minOf(red, green, blue, 1.0f)
         if (floor > 0f) {
             red /= floor
@@ -224,29 +232,54 @@ class BmSettings {
     }
 
     /**
-     * Aproximación de Planck (Kim et al. / Kang et al.) para 2500-10000 K.
+     * Respuesta del iluminante para una temperatura de color, en escala 0-255.
      *
-     * Devuelve la respuesta relativa del iluminante en R, G, B normalizada a
-     * 0..1 con el verde a 1.0, que es la base del balance de blancos.
+     * Usa la tabla `wbct_lookup` de FreeDcam (86 entradas, 1500-10000 K,
+     * interpolada linealmente) y solo cae en la aproximación de Planck
+     * (Kim et al. / Kang et al.) fuera de ese rango.
      */
     private fun kelvinToRgb(kelvin: Int): Triple<Float, Float, Float> {
-        val temperature = kelvin.coerceIn(2500, 10000).toDouble() / 100.0
+        wbctLookup(kelvin)?.let { return it }
+        return planckRgb(kelvin)
+    }
 
-        // Rojo
+    /** Interpolación lineal sobre `wbct_lookup`; null si la temperatura se sale. */
+    private fun wbctLookup(kelvin: Int): Triple<Float, Float, Float>? {
+        if (kelvin < WBCT_TEMPERATURES.first() || kelvin > WBCT_TEMPERATURES.last()) return null
+        var low = 0
+        var high = WBCT_TEMPERATURES.size - 1
+        while (high - low > 1) {
+            val mid = (low + high) / 2
+            if (WBCT_TEMPERATURES[mid] <= kelvin) low = mid else high = mid
+        }
+        val t0 = WBCT_TEMPERATURES[low]
+        val t1 = WBCT_TEMPERATURES[high]
+        val ratio = if (t1 == t0) 0f else (kelvin - t0).toFloat() / (t1 - t0).toFloat()
+        val base0 = low * 3
+        val base1 = high * 3
+        return Triple(
+            WBCT_RGB[base0] + (WBCT_RGB[base1] - WBCT_RGB[base0]) * ratio,
+            WBCT_RGB[base0 + 1] + (WBCT_RGB[base1 + 1] - WBCT_RGB[base0 + 1]) * ratio,
+            WBCT_RGB[base0 + 2] + (WBCT_RGB[base1 + 2] - WBCT_RGB[base0 + 2]) * ratio
+        )
+    }
+
+    /** Aproximación de Planck (Kim/Kang) en la escala 0-255, para fuera de tabla. */
+    private fun planckRgb(kelvin: Int): Triple<Float, Float, Float> {
+        val temperature = kelvin.coerceIn(1500, 20000).toDouble() / 100.0
+
         val red = if (temperature <= 66.0) {
             255.0
         } else {
             (329.698727446 * (temperature - 60.0).pow(-0.1332047592)).coerceIn(0.0, 255.0)
         }
 
-        // Verde
         val green = if (temperature <= 66.0) {
             (99.4708025861 * ln(temperature) - 161.1195681661).coerceIn(0.0, 255.0)
         } else {
             (288.1221695283 * (temperature - 60.0).pow(-0.0755148492)).coerceIn(0.0, 255.0)
         }
 
-        // Azul
         val blue = when {
             temperature >= 66.0 -> 255.0
             temperature <= 19.0 -> 0.0
@@ -254,10 +287,110 @@ class BmSettings {
         }
 
         return Triple(
-            (red / 255.0).toFloat().coerceAtLeast(0.02f),
-            (green / 255.0).toFloat().coerceAtLeast(0.02f),
-            (blue / 255.0).toFloat().coerceAtLeast(0.02f)
+            red.toFloat().coerceAtLeast(1f),
+            green.toFloat().coerceAtLeast(1f),
+            blue.toFloat().coerceAtLeast(1f)
         )
+    }
+
+    // ------------------------------------------------------- curvas de tonos
+
+    /**
+     * Perfiles de curva de tonos del botón LOG.
+     *
+     * FreeDcam publica `ManualToneMapCurveApi2` y el array `tonemapmodes` de
+     * `res/values/arrays.xml` para elegir el modo; aquí se aplica el mismo
+     * criterio con una curva de contraste propia por perfil, porque el eje de
+     * tonos del CaptureRequest es una LUT y no un nombre de perfil.
+     */
+    enum class ToneProfile(val label: String) {
+        /** Logarítmica: altas luces comprimidas, sombras levantadas. */
+        LOG("Log"),
+        /** Plana de cine: aún menos contraste, para etalonar después. */
+        FLAT("Flat"),
+        /** Contraste de vídeo estándar. */
+        REC709("Rec.709")
+    }
+
+    /**
+     * Curva de tonos del perfil activo, en pares entrada/salida 0..1.
+     *
+     * La salida es monótona y se queda dentro de rango, que es lo que exige
+     * `TONEMAP_CURVE`.
+     */
+    fun toneCurve(profile: ToneProfile): FloatArray {
+        val input = floatArrayOf(0f, 0.09f, 0.18f, 0.35f, 0.55f, 0.75f, 1f)
+        val output = when (profile) {
+            ToneProfile.LOG -> floatArrayOf(0.02f, 0.22f, 0.36f, 0.52f, 0.68f, 0.82f, 0.94f)
+            ToneProfile.FLAT -> floatArrayOf(0.04f, 0.26f, 0.40f, 0.55f, 0.70f, 0.83f, 0.92f)
+            ToneProfile.REC709 -> floatArrayOf(0.0f, 0.10f, 0.22f, 0.42f, 0.62f, 0.82f, 1.0f)
+        }
+        val curve = FloatArray(input.size * 2)
+        for (index in input.indices) {
+            curve[index * 2] = input[index]
+            curve[index * 2 + 1] = output[index]
+        }
+        return curve
+    }
+
+    // ------------------------------------------- indices discretos (FreeDcam)
+
+    /**
+     * Valores de ISO del sensor, generados como en FreeDcam
+     * (`featuredetector/camera2/IsoDetector.getIsoStrings`): desde el minimo del
+     * rango declarado en pasos de 50, duplicando el salto por encima de 3200.
+     */
+    fun buildIsoStops(minIso: Int, maxIso: Int): IntArray {
+        val result = ArrayList<Int>()
+        var value = max(1, minIso)
+        val ceiling = max(value, maxIso)
+        while (value <= ceiling) {
+            result.add(value)
+            if (value > 3200) {
+                val next = value * 2
+                value = if (next > ceiling) ceiling else next
+                if (result.last() == value) break
+            } else {
+                value += 50
+            }
+        }
+        if (result.lastOrNull() != ceiling) result.add(ceiling)
+        return result.toIntArray()
+    }
+
+    /**
+     * Obturaciones validas: la tabla de FreeDcam filtrada por
+     * `SENSOR_INFO_EXPOSURE_TIME_RANGE`, como hace
+     * `ExposureTimeDetector.getShutterStrings` (cada entrada a microsegundos).
+     */
+    fun buildShutterStops(minNs: Long, maxNs: Long): LongArray {
+        if (maxNs <= minNs) return longArrayOf(minNs.coerceAtLeast(1L))
+        val minUs = minNs / 1000.0
+        val maxUs = maxNs / 1000.0
+        val filtered = SHUTTER_TABLE_NS.filter { it / 1000.0 in minUs..maxUs }
+        return if (filtered.isEmpty()) longArrayOf(minNs, maxNs) else filtered.toLongArray()
+    }
+
+    /** Indice del valor mas cercano dentro de una tabla ordenada. */
+    fun nearestIndex(values: IntArray, target: Int): Int {
+        var best = 0
+        var bestDelta = Int.MAX_VALUE
+        values.forEachIndexed { index, value ->
+            val delta = kotlin.math.abs(value - target)
+            if (delta < bestDelta) { bestDelta = delta; best = index }
+        }
+        return best
+    }
+
+    /** Indice del valor mas cercano dentro de una tabla ordenada de long. */
+    fun nearestIndex(values: LongArray, target: Long): Int {
+        var best = 0
+        var bestDelta = Long.MAX_VALUE
+        values.forEachIndexed { index, value ->
+            val delta = kotlin.math.abs(value - target)
+            if (delta < bestDelta) { bestDelta = delta; best = index }
+        }
+        return best
     }
 
     companion object {
@@ -288,6 +421,142 @@ class BmSettings {
         )
 
         /** Límites reales de `COLOR_CORRECTION_GAINS`; se ajustan al abrir la cámara. */
+        /** Suelo de ganancia de FreeDcam (`WbHandler.MINCAP`). */
+        const val MIN_GAIN_CAP = 1.0f
+
+        /**
+         * Tabla `wbct_lookup` de FreeDcam (KillerInk/FreeDcam,
+         * `app/src/main/res/values/arrays.xml`), recortada a 2500-10000 K.
+         *
+         * Cada fila es `temperatura, R, G, B` con los canales en escala 0-255.
+         * FreeDcam los convierte con `WbHandler.getRGBToDouble`
+         * (`(2/255)*color + 1`) y arma `RggbChannelVector(r, g/2, g/2, b)` con
+         * `MINCAP = 1.0`.
+         */
+        val WBCT_TABLE: LongArray = longArrayOf(
+            2500, 255, 159, 70,
+            2600, 255, 163, 79,
+            2700, 255, 167, 87,
+            2800, 255, 170, 95,
+            2900, 255, 174, 103,
+            3000, 255, 177, 110,
+            3100, 255, 180, 117,
+            3200, 255, 184, 123,
+            3300, 255, 187, 129,
+            3400, 255, 190, 135,
+            3500, 255, 193, 141,
+            3600, 255, 195, 146,
+            3700, 255, 198, 151,
+            3800, 255, 201, 157,
+            3900, 255, 203, 161,
+            4000, 255, 206, 166,
+            4100, 255, 208, 171,
+            4200, 255, 211, 175,
+            4300, 255, 213, 179,
+            4400, 255, 215, 183,
+            4500, 255, 218, 187,
+            4600, 255, 220, 191,
+            4700, 255, 222, 195,
+            4800, 255, 224, 199,
+            4900, 255, 226, 202,
+            5000, 255, 228, 206,
+            5100, 255, 230, 209,
+            5200, 255, 232, 213,
+            5300, 255, 234, 216,
+            5400, 255, 236, 219,
+            5500, 255, 237, 222,
+            5600, 255, 239, 225,
+            5700, 255, 241, 228,
+            5800, 255, 243, 231,
+            5900, 255, 244, 234,
+            6000, 255, 246, 237,
+            6100, 255, 248, 240,
+            6200, 255, 249, 242,
+            6300, 255, 251, 245,
+            6400, 255, 253, 248,
+            6500, 255, 254, 250,
+            6600, 255, 255, 255,
+            6700, 254, 249, 255,
+            6800, 250, 246, 255,
+            6900, 246, 244, 255,
+            7000, 243, 242, 255,
+            7100, 240, 240, 255,
+            7200, 237, 239, 255,
+            7300, 234, 237, 255,
+            7400, 232, 236, 255,
+            7500, 230, 235, 255,
+            7600, 228, 234, 255,
+            7700, 226, 233, 255,
+            7800, 224, 232, 255,
+            7900, 223, 231, 255,
+            8000, 221, 230, 255,
+            8100, 220, 229, 255,
+            8200, 218, 228, 255,
+            8300, 217, 227, 255,
+            8400, 216, 227, 255,
+            8500, 215, 226, 255,
+            8600, 214, 225, 255,
+            8700, 213, 225, 255,
+            8800, 212, 224, 255,
+            8900, 211, 223, 255,
+            9000, 210, 223, 255,
+            9100, 209, 222, 255,
+            9200, 208, 222, 255,
+            9300, 207, 221, 255,
+            9400, 206, 221, 255,
+            9500, 205, 220, 255,
+            9600, 205, 220, 255,
+            9700, 204, 219, 255,
+            9800, 203, 219, 255,
+            9900, 202, 218, 255,
+            10000, 201, 218, 255,
+        )
+
+        /** Temperaturas de [WBCT_TABLE]. */
+        val WBCT_TEMPERATURES: IntArray =
+            IntArray(WBCT_TABLE.size / 4) { WBCT_TABLE[it * 4].toInt() }
+
+        /** Canales R, G y B de [WBCT_TABLE] en orden, escala 0-255. */
+        val WBCT_RGB: FloatArray = FloatArray((WBCT_TABLE.size / 4) * 3) { index ->
+            val row = index / 3
+            val channel = index % 3
+            WBCT_TABLE[row * 4 + 1 + channel].toFloat()
+        }
+
+        /**
+         * Tabla de obturaciones de FreeDcam (`res/values/shutter_values.xml`,
+         * array `shutter_values_autocreate`): los nombres `@string/shutter_A_B`
+         * se convierten a nanosegundos (A/B segundos) y `@string/shutter_N` a N
+         * segundos. 140 entradas, filtradas por [buildShutterStops]
+         * al rango real del sensor.
+         */
+        val SHUTTER_TABLE_NS: LongArray = longArrayOf(
+            10000L, 11111L, 13333L, 20000L, 22222L, 33333L,
+            50000L, 66667L, 83333L, 100000L, 125000L, 156250L,
+            166667L, 200000L, 250000L, 312500L, 400000L, 500000L,
+            625000L, 800000L, 909091L, 1000000L, 1052632L, 1111111L,
+            1176471L, 1250000L, 1333333L, 1428571L, 1538462L, 1562500L,
+            1666667L, 1818182L, 2000000L, 2222222L, 2500000L, 2666667L,
+            2857143L, 3076923L, 3125000L, 3333333L, 3636364L, 4000000L,
+            4444444L, 5000000L, 5714286L, 6666667L, 8000000L, 10000000L,
+            11764706L, 12500000L, 13333333L, 15384615L, 16666667L, 18181818L,
+            20000000L, 22222222L, 25000000L, 28571429L, 33333333L, 40000000L,
+            50000000L, 66666667L, 76923077L, 100000000L, 111111111L, 125000000L,
+            142857143L, 166666667L, 200000000L, 250000000L, 333333333L, 500000000L,
+            1000000000L, 2000000000L, 3000000000L, 4000000000L, 5000000000L, 6000000000L,
+            7000000000L, 8000000000L, 9000000000L, 10000000000L, 11000000000L, 12000000000L,
+            13000000000L, 14000000000L, 15000000000L, 16000000000L, 17000000000L, 18000000000L,
+            19000000000L, 20000000000L, 21000000000L, 22000000000L, 23000000000L, 24000000000L,
+            25000000000L, 26000000000L, 27000000000L, 28000000000L, 29000000000L, 30000000000L,
+            31000000000L, 32000000000L, 33000000000L, 34000000000L, 35000000000L, 36000000000L,
+            37000000000L, 38000000000L, 39000000000L, 40000000000L, 41000000000L, 42000000000L,
+            43000000000L, 44000000000L, 45000000000L, 46000000000L, 47000000000L, 48000000000L,
+            49000000000L, 50000000000L, 51000000000L, 52000000000L, 53000000000L, 54000000000L,
+            55000000000L, 56000000000L, 57000000000L, 58000000000L, 59000000000L, 60000000000L,
+            90000000000L, 120000000000L, 180000000000L, 240000000000L, 900000000000L, 1200000000000L,
+            1800000000000L, 3600000000000L,
+        )
+
         var gainMin: Float = 0.25f
         var gainMax: Float = 4.0f
 

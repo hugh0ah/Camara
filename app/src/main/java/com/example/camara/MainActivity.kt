@@ -24,6 +24,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
 import android.os.StatFs
 import android.util.Log
@@ -79,19 +80,6 @@ class MainActivity : AppCompatActivity() {
          * pantalla en negro al crear la sesión.
          */
         val supportedBufferSizes = listOf(Size(1920, 1080), Size(1440, 1080))
-
-        /**
-         * Matriz de corrección de color neutra (identidad en sRGB lineal).
-         *
-         * El HAL de Vivo publica su propia `COLOR_CORRECTION_TRANSFORM`, ajustada
-         * para su AWB y con sobre-saturación. Al fijar esta identidad, la cadena
-         * de color queda sólo en manos de las ganancias RGGB que calculamos, sin
-         * que el ISP reintroduzca dominantes.
-         */
-        val NEUTRAL_COLOR_TRANSFORM: ColorSpaceTransform by lazy {
-            // Identidad 3x3 en formato numerador/denominador por filas.
-            ColorSpaceTransform(intArrayOf(1, 1, 0, 1, 0, 1, 0, 1, 1, 1, 0, 1, 0, 1, 0, 1, 1, 1))
-        }
         const val MENU_ZEBRA = 1
         const val MENU_PEAKING = 2
         const val MENU_FALSE = 3
@@ -99,14 +87,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private val settings = BmSettings()
-
-    /**
-     * Fija la matriz de color neutra en lugar de la propietaria del ISP de Vivo.
-     *
-     * Se puede conmutar en caliente desde el puente de depuración
-     * (`cmd: "matrix:neutral:on|off"`) para comparar en el mismo encuadre.
-     */
-    private var neutralIspColor: Boolean = true
     private lateinit var textureView: TextureView
     private lateinit var topBar: BmTopBar
     private lateinit var header: BmHeaderBar
@@ -195,8 +175,28 @@ class MainActivity : AppCompatActivity() {
     private var contrastCurveSupported = false
     private var isoStops: IntArray = BmSettings.ISO_STOPS
 
+    /** Índices de obturación válidos, generados de la tabla de FreeDcam. */
+    private var shutterStops: LongArray = BmSettings.SUTTER_STOPS
+
+    /** El HAL publica `CONTROL_ZOOM_RATIO`; si no, se omite el ajuste. */
+    private var zoomRatioSupported = false
+
     private val executor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    /**
+     * Hilo dedicado a la cámara, como en FreeDcam y OpenCamera.
+     *
+     * Todas las llamadas bloqueantes de Camera2 (`openCamera`,
+     * `createCaptureSession`, `setRepeatingRequest`, `stopRepeating`, `close`) se
+     * hacen aquí y nunca en el hilo de interfaz: era lo que congelaba la UI al
+     * tocar ISO o arrastrar la regla graduada.
+     */
+    private val cameraThread = HandlerThread("BmCamera").apply { start() }
+    private val cameraHandler = Handler(cameraThread.looper)
+
+    /** Ejecutor que despacha al hilo de cámara, para SessionConfiguration. */
+    private val cameraExecutor = java.util.concurrent.Executor { command -> cameraHandler.post(command) }
 
     private var videoRecorder: VideoRecorder? = null
     private var analyzer: BmMonitorAnalyzer? = null
@@ -484,6 +484,26 @@ class MainActivity : AppCompatActivity() {
         bottomBar.onExposureToggle = { setAutoExposure(!settings.autoExposure) }
         bottomBar.onAutoFocusToggle = { toggleFocusMode() }
         bottomBar.onCleanScreen = { setOverlaysVisible(!settings.overlaysVisible) }
+        // Bloqueos AE/AWB y estabilización óptica (OpenCamera,
+        // CameraController2): se aplican al CaptureRequest en el acto.
+        bottomBar.onAeLock = {
+            settings.aeLock = !settings.aeLock
+            refreshBottomStates()
+            pushSettings()
+            Log.i(TAG_CAMERA, "CONTROL_AE_LOCK -> ${settings.aeLock}")
+        }
+        bottomBar.onAwbLock = {
+            settings.awbLock = !settings.awbLock
+            refreshBottomStates()
+            pushSettings()
+            Log.i(TAG_CAMERA, "CONTROL_AWB_LOCK -> ${settings.awbLock}")
+        }
+        bottomBar.onOisToggle = {
+            settings.opticalStabilization = !settings.opticalStabilization
+            refreshBottomStates()
+            pushSettings()
+            Log.i(TAG_CAMERA, "OIS -> ${settings.opticalStabilization}")
+        }
         refreshBottomStates()
     }
 
@@ -641,7 +661,10 @@ class MainActivity : AppCompatActivity() {
             settings.lutEnabled,
             settings.autoExposure,
             settings.autoFocus,
-            !settings.overlaysVisible
+            !settings.overlaysVisible,
+            aeLocked = settings.aeLock,
+            awbLocked = settings.awbLock,
+            oisActive = settings.opticalStabilization
         )
         header.setLutActive(settings.lutEnabled)
     }
@@ -711,11 +734,11 @@ class MainActivity : AppCompatActivity() {
             "${settings.fps}" to index / (values.size - 1).toFloat()
         }
         "SHUTTER" -> {
-            val index = nearestIndex(BmSettings.SUTTER_STOPS.map { it.toFloat() }, settings.shutterNs.toFloat())
-            settings.shutterLabel to index / (BmSettings.SUTTER_STOPS.size - 1).toFloat()
+            val index = settings.nearestIndex(shutterStops, settings.shutterNs)
+            settings.shutterLabel to index / (shutterStops.size - 1).toFloat()
         }
         "ISO" -> {
-            val index = nearestIndex(isoStops.map { it.toFloat() }, settings.iso.toFloat())
+            val index = settings.nearestIndex(isoStops, settings.iso)
             "${settings.iso}" to index / (isoStops.size - 1).toFloat()
         }
         "WB" -> {
@@ -802,8 +825,8 @@ class MainActivity : AppCompatActivity() {
                     return
                 }
             }
-            "SHUTTER" -> settings.shutterNs = valueAt(BmSettings.SUTTER_STOPS.map { it.toFloat() }, position).toLong()
-            "ISO" -> settings.iso = valueAt(isoStops.map { it.toFloat() }, position).toInt()
+            "SHUTTER" -> settings.shutterNs = shutterStops[(position * (shutterStops.size - 1)).toInt().coerceIn(0, shutterStops.size - 1)]
+            "ISO" -> settings.iso = isoStops[(position * (isoStops.size - 1)).toInt().coerceIn(0, isoStops.size - 1)]
             "WB" -> settings.kelvin = valueAt(BmSettings.KELVIN_STOPS.map { it.toFloat() }, position).toInt()
             "TINT" -> settings.tint = valueAt(BmSettings.TINT_STOPS.map { it.toFloat() }, position).toInt()
             "FOCUS" -> settings.focusDiopters = position * max(0.001f, settings.focusMinDiopters)
@@ -817,7 +840,7 @@ class MainActivity : AppCompatActivity() {
         when (key) {
             "SHUTTER" -> settings.stepShutter(direction)
             "ISO" -> {
-                val index = nearestIndex(isoStops.map { it.toFloat() }, settings.iso.toFloat())
+                val index = settings.nearestIndex(isoStops, settings.iso)
                 settings.iso = isoStops[(index + direction).coerceIn(0, isoStops.size - 1)]
             }
             "WB" -> {
@@ -955,10 +978,9 @@ class MainActivity : AppCompatActivity() {
         val applied = lastAppliedGains
         val line = buildString {
             append(
-                "%-6s wb=%dK tint=%d autoWb=%b mode=%s matrix=%s | gains R=%.4f Ge=%.4f Go=%.4f B=%.4f | win=%s..%s".format(
+                "%-6s wb=%dK tint=%d autoWb=%b mode=%s cc=FAST | gains R=%.4f Ge=%.4f Go=%.4f B=%.4f | win=%s..%s".format(
                     Locale.US, origin, settings.kelvin, settings.tint, settings.autoWb,
                     if (settings.autoExposure) "AE" else "M",
-                    if (neutralIspColor) "neutra" else "ISP",
                     gains.red, gains.greenEven, gains.greenOdd, gains.blue,
                     BmSettings.gainMin, BmSettings.gainMax
                 )
@@ -1114,9 +1136,7 @@ class MainActivity : AppCompatActivity() {
             }
             // Matriz de color: propia del ISP o neutra, para comparar en vivo.
             "matrix" -> {
-                neutralIspColor = parts.getOrNull(2)?.equals("on", ignoreCase = true) == true
-                pushSettings()
-                dumpDiagnostics("matrix")
+                Log.i(TAG_CAMERA, "La matriz de color la fija ahora el HAL (COLOR_CORRECTION_MODE_FAST)")
             }
             "rail" -> setRailOpen(parts.getOrNull(1)?.equals("on", ignoreCase = true) == true)
             // Bloqueo de orientación (puente de depuración): orient:portrait|landscape|auto
@@ -1183,7 +1203,12 @@ class MainActivity : AppCompatActivity() {
 
     // ------------------------------------------------------------- cámara
 
+    /** Abre la cámara en el hilo dedicado, nunca en el de interfaz. */
     private fun openCamera() {
+        cameraHandler.post { openCameraInternal() }
+    }
+
+    private fun openCameraInternal() {
         val manager = cameraManager ?: return
         probeCapabilities(manager)
         val cameraId = if (manager.getCameraIdList().contains(LOGICAL_CAMERA_ID)) LOGICAL_CAMERA_ID
@@ -1207,7 +1232,7 @@ class MainActivity : AppCompatActivity() {
                     cameraDevice = null
                     captureSession = null
                 }
-            }, mainHandler)
+            }, cameraHandler)
         } catch (t: Throwable) {
             Log.e(TAG_CAMERA, "openCamera($cameraId) falló: ${t.message}")
         }
@@ -1254,27 +1279,35 @@ class MainActivity : AppCompatActivity() {
                         applyPreviewAspect()
                         applyPreviewTransform()
                     }
+                    // Índices discretos generados desde los rangos reales del
+                    // sensor, como en FreeDcam (IsoDetector / ExposureTimeDetector).
                     isoRange?.let {
                         settings.isoMin = it.lower
                         settings.isoMax = it.upper
                     }
-                    val filteredIso = BmSettings.ISO_STOPS.filter { it in settings.isoMin..settings.isoMax }
-                    isoStops = (
-                        if (filteredIso.isEmpty()) {
-                            listOf(settings.isoMin, (settings.isoMin + settings.isoMax) / 2, settings.isoMax)
-                        } else {
-                            filteredIso
-                        }
-                        ).toIntArray()
+                    isoStops = settings.buildIsoStops(settings.isoMin, settings.isoMax)
                     exposureRange?.let {
-                        settings.shutterMinNs = max(it.lower, 125_000L)
-                        settings.shutterMaxNs = minOf(it.upper, 41_666_666L)
+                        settings.shutterMinNs = it.lower
+                        settings.shutterMaxNs = it.upper
                     }
+                    shutterStops = settings.buildShutterStops(settings.shutterMinNs, settings.shutterMaxNs)
+                    // El valor activo se ajusta al índice válido más cercano.
+                    settings.iso = isoStops[settings.nearestIndex(isoStops, settings.iso)]
+                    settings.shutterNs =
+                        shutterStops[settings.nearestIndex(shutterStops, settings.shutterNs)]
+                    Log.i(
+                        TAG_CAMERA,
+                        "Índices: isoStops=${isoStops.size} (${isoStops.first()}..${isoStops.last()}) " +
+                            "shutterStops=${shutterStops.size} " +
+                            "(${shutterStops.first()}ns..${shutterStops.last()}ns) " +
+                            "activos iso=${settings.iso} shutter=${settings.shutterLabel}"
+                    )
                     settings.focusMinDiopters = focusMin ?: 0f
                     settings.apertureLabel = apertures?.firstOrNull()?.let { value ->
                         String.format(Locale.US, "f/%.1f", value)
                     } ?: "—"
                     val toneModes: IntArray? = chars.get(CameraCharacteristics.TONEMAP_AVAILABLE_TONE_MAP_MODES)
+                    zoomRatioSupported = chars.keys.any { it.name == "CONTROL_ZOOM_RATIO" }
                     contrastCurveSupported =
                         toneModes?.any { it == CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE } == true
                     // Rango real de ganancias RGGB del sensor: acota el balance de
@@ -1306,7 +1339,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** Crea la sesión en el hilo de cámara; el llamante nunca se bloquea. */
     private fun createSession(recorderSurface: Surface?) {
+        cameraHandler.post { createSessionInternal(recorderSurface) }
+    }
+
+    private fun createSessionInternal(recorderSurface: Surface?) {
         val device = cameraDevice ?: return
         // Nunca se crea una sesión sin superficie lista: en MediaTek eso deja el
         // visor en negro hasta reiniciar la cámara.
@@ -1341,14 +1379,14 @@ class MainActivity : AppCompatActivity() {
         val config = SessionConfiguration(
             SessionConfiguration.SESSION_REGULAR,
             outputs,
-            executor,
+            cameraExecutor,
             object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(session: CameraCaptureSession) {
                     captureSession = session
                     try {
                         val builder = buildRequest(recorderSurface) ?: return
                         requestBuilder = builder
-                        session.setRepeatingRequest(builder.build(), captureCallback, mainHandler)
+                        session.setRepeatingRequest(builder.build(), captureCallback, cameraHandler)
                         if (isRecording && recorderSurface == null) {
                             // La sesión de grabación se recreó sin superficie: no ocurre en uso normal.
                             Log.w(TAG_CAMERA, "Sesión configurada sin superficie de grabación")
@@ -1484,26 +1522,34 @@ class MainActivity : AppCompatActivity() {
         }
         builder.set(CaptureRequest.SENSOR_FRAME_DURATION, 1_000_000_000L / max(1, settings.fps))
         bestFpsRange(settings.fps)?.let { builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
+        // Bloqueos de exposición y balance (OpenCamera, CameraController2).
+        // En Camera2 estos dos ejes son booleanos: true congela el valor que
+        // acaba de resolver el algoritmo automático, sin pasar a manual.
+        builder.set(CaptureRequest.CONTROL_AE_LOCK, settings.aeLock)
+        builder.set(CaptureRequest.CONTROL_AWB_LOCK, settings.awbLock)
+        // Estabilización óptica del objetivo, sumada a la electrónica.
+        builder.set(
+            CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
+            if (settings.opticalStabilization) CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON
+            else CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_OFF
+        )
+        // Zoom suave por ratio, si el HAL lo publica.
+        if (zoomRatioSupported) {
+            builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, settings.zoomRatio.coerceAtLeast(1.0f))
+        }
         // Balance de blancos: AWB nativo del ISP (insignia «A») o ganancias RGGB
         // calculadas con Planck + tinte.
         if (settings.autoWb) {
             builder.set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
-            // AWB automático: también se fija la matriz neutra, para que el ISP
-            // resuelva el punto blanco sin reaplicar su saturación propietaria.
-            if (neutralIspColor) {
-                builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX)
-                builder.set(CaptureRequest.COLOR_CORRECTION_TRANSFORM, NEUTRAL_COLOR_TRANSFORM)
-            }
         } else {
             builder.set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_OFF)
-            builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_TRANSFORM_MATRIX)
+            // COLOR_CORRECTION_MODE_FAST, como PhotonCamera en su balance manual
+            // (ParamController): la matriz de color calibrada del HAL sigue
+            // aplicándose y sólo se inyectan las ganancias RGGB. Antes se forzaba
+            // TRANSFORM_MATRIX con una identidad inventada, que anulaba la
+            // calibración del sensor.
+            builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_FAST)
             builder.set(CaptureRequest.COLOR_CORRECTION_GAINS, settings.rggbGains())
-            // Matriz de corrección neutra (identidad): anula la matriz propietaria
-            // del ISP de Vivo y su sobresaturación, que es la que reintroducía la
-            // dominante verde sobre las ganancias manuales.
-            if (neutralIspColor) {
-                builder.set(CaptureRequest.COLOR_CORRECTION_TRANSFORM, NEUTRAL_COLOR_TRANSFORM)
-            }
         }
         // Enfoque: AF continuo por defecto (nítido sin tocar nada); MF manual con
         // distancia de foco. El tap-to-focus usa AF_MODE_AUTO + disparo puntual.
@@ -1528,19 +1574,27 @@ class MainActivity : AppCompatActivity() {
         builder.set(CaptureRequest.NOISE_REDUCTION_MODE, CaptureRequest.NOISE_REDUCTION_MODE_OFF)
         if (settings.logEnabled && contrastCurveSupported) {
             builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE)
-            builder.set(CaptureRequest.TONEMAP_CURVE, logTonemapCurve())
+            builder.set(CaptureRequest.TONEMAP_CURVE, toneMapCurve())
         } else {
             builder.set(CaptureRequest.TONEMAP_MODE, CaptureRequest.TONEMAP_MODE_FAST)
         }
     }
 
-    /** Reenvía los ajustes actuales al sensor en vivo. */
+    /** Reenvía los ajustes actuales al sensor en el hilo de cámara. */
     private fun pushSettings() {
+        if (Looper.myLooper() == cameraThread.looper) {
+            pushSettingsInternal()
+        } else {
+            cameraHandler.post { pushSettingsInternal() }
+        }
+    }
+
+    private fun pushSettingsInternal() {
         val session = captureSession ?: return
         val builder = requestBuilder ?: return
         fillRequest(builder)
         try {
-            session.setRepeatingRequest(builder.build(), captureCallback, mainHandler)
+            session.setRepeatingRequest(builder.build(), captureCallback, cameraHandler)
             Log.i(
                 TAG_METER,
                 "PUSH iso=%d shutter=%s wb=%dK tint=%d fps=%d focus=%.2f lens=%s autoWb=%b %s".format(
@@ -1549,26 +1603,37 @@ class MainActivity : AppCompatActivity() {
                     if (settings.autoWb) "AWB=ISP" else settings.gainsLabel()
                 )
             )
-        } catch (t: Throwable) {
-            // El HAL rechazó petición: si el problema es la ganancia RGGB, se
-            // estrecha la ventana al rango neutro y se reintenta una vez.
-            if (!settings.autoWb && BmSettings.narrowGainWindow()) {
-                Log.w(
-                    TAG_METER,
-                    "Ganancias fuera de rango (${t.message}); ventana -> " +
-                        "${BmSettings.gainMin}..${BmSettings.gainMax}, reintentando"
-                )
-                fillRequest(builder)
-                try {
-                    session.setRepeatingRequest(builder.build(), captureCallback, mainHandler)
-                    Log.i(TAG_METER, "PUSH reintentado con ${settings.gainsLabel()}")
-                    return
-                } catch (retry: Throwable) {
-                    Log.e(TAG_CAMERA, "Reintento de ganancias falló: ${retry.message}")
-                }
-            }
-            Log.e(TAG_CAMERA, "No se pudo aplicar el ajuste: ${t.message}")
+        } catch (t: IllegalArgumentException) {
+            handleRejectedSettings(t)
+        } catch (t: android.hardware.camera2.CameraAccessException) {
+            handleRejectedSettings(t)
         }
+    }
+
+    /**
+     * El HAL rechazó la petición. Si el problema está en las ganancias RGGB, se
+     * estrecha la ventana al rango neutro y se reintenta una vez; nunca propaga
+     * la excepción al hilo de interfaz.
+     */
+    private fun handleRejectedSettings(cause: Throwable) {
+        val session = captureSession
+        val builder = requestBuilder
+        if (session != null && builder != null && !settings.autoWb && BmSettings.narrowGainWindow()) {
+            Log.w(
+                TAG_METER,
+                "Petición rechazada (${cause.message}); ventana de ganancias -> " +
+                    "${BmSettings.gainMin}..${BmSettings.gainMax}, reintentando"
+            )
+            fillRequest(builder)
+            try {
+                session.setRepeatingRequest(builder.build(), captureCallback, cameraHandler)
+                Log.i(TAG_METER, "PUSH reintentado con ${settings.gainsLabel()}")
+                return
+            } catch (retry: Exception) {
+                Log.e(TAG_CAMERA, "Reintento de ganancias falló: ${retry.message}")
+            }
+        }
+        Log.e(TAG_CAMERA, "No se pudo aplicar el ajuste: ${cause.message}")
     }
 
     private fun bestFpsRange(fps: Int): Range<Int>? {
@@ -1579,14 +1644,9 @@ class MainActivity : AppCompatActivity() {
         return containing.minByOrNull { it.upper - it.lower } ?: availableFpsRanges.maxByOrNull { it.upper }
     }
 
-    private fun logTonemapCurve(): TonemapCurve {
-        val input = floatArrayOf(0f, 0.18f, 0.35f, 0.55f, 0.75f, 1f)
-        val output = floatArrayOf(0.10f, 0.30f, 0.44f, 0.58f, 0.72f, 0.86f)
-        val curve = FloatArray(input.size * 2)
-        for (index in input.indices) {
-            curve[index * 2] = input[index]
-            curve[index * 2 + 1] = output[index]
-        }
+    /** Curva de tonos del perfil activo, lista para `TONEMAP_CURVE`. */
+    private fun toneMapCurve(): TonemapCurve {
+        val curve = settings.toneCurve(settings.toneProfile)
         return TonemapCurve(curve, curve.copyOf(), curve.copyOf())
     }
 

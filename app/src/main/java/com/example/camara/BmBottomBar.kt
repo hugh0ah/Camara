@@ -71,12 +71,22 @@ class BmBottomBar @JvmOverloads constructor(
     val autoFocusButton: BmIconToggle
     val cleanScreenButton: BmIconToggle
 
+    /** Bloqueo de exposición y balance, portado de OpenCamera. */
+    val aeLockButton: BmIconToggle
+    val awbLockButton: BmIconToggle
+
+    /** Estabilización óptica del objetivo. */
+    val oisButton: BmIconToggle
+
     var onGuides: (() -> Unit)? = null
     var onLutToggle: (() -> Unit)? = null
     var onFocusTarget: (() -> Unit)? = null
     var onExposureToggle: (() -> Unit)? = null
     var onAutoFocusToggle: (() -> Unit)? = null
     var onCleanScreen: (() -> Unit)? = null
+    var onAeLock: (() -> Unit)? = null
+    var onAwbLock: (() -> Unit)? = null
+    var onOisToggle: (() -> Unit)? = null
 
     init {
         orientation = HORIZONTAL
@@ -130,9 +140,51 @@ class BmBottomBar @JvmOverloads constructor(
         endCluster.addView(exposureButton, LayoutParams(dp(40), dp(40)))
         endCluster.addView(autoFocusButton, LayoutParams(dp(40), dp(40)).apply { marginStart = dp(6) })
         endCluster.addView(cleanScreenButton, LayoutParams(dp(40), dp(40)).apply { marginStart = dp(6) })
+
+        // Bloqueos AE/AWB y estabilización óptica: mismo icono vectorial propio,
+        // con área táctil de 40 dp ampliada a 48 dp por TouchDelegate.
+        aeLockButton = BmIconToggle(context).apply {
+            setIcon(R.drawable.ic_bm_ev)
+            setOnClickListener { onAeLock?.invoke() }
+        }
+        awbLockButton = BmIconToggle(context).apply {
+            setIcon(R.drawable.ic_bm_af)
+            setOnClickListener { onAwbLock?.invoke() }
+        }
+        oisButton = BmIconToggle(context).apply {
+            setIcon(R.drawable.ic_bm_stabilizer)
+            setOnClickListener { onOisToggle?.invoke() }
+        }
+        endCluster.addView(aeLockButton, LayoutParams(dp(40), dp(40)).apply { marginStart = dp(6) })
+        endCluster.addView(awbLockButton, LayoutParams(dp(40), dp(40)).apply { marginStart = dp(6) })
+        endCluster.addView(oisButton, LayoutParams(dp(40), dp(40)).apply { marginStart = dp(6) })
+
         addView(
             endCluster,
             LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply { gravity = Gravity.END }
+        )
+
+        // Respuesta al primer toque en todos los botones de la fila.
+        listOf(
+            guidesButton, focusTargetButton, exposureButton,
+            autoFocusButton, cleanScreenButton, aeLockButton, awbLockButton, oisButton
+        ).forEach { button ->
+            button.addOnLayoutChangeListener { view, _, _, _, _, _, _, _, _ ->
+                expandTouchTarget(view)
+            }
+        }
+    }
+
+    /** Amplía el área sensible de un botón hasta 48 dp sin moverlo en pantalla. */
+    private fun expandTouchTarget(view: View) {
+        if (view.width <= 0 || view.height <= 0) return
+        val minimum = dp(48)
+        val extraV = ((minimum - view.height) / 2).coerceAtLeast(0)
+        val extraH = ((minimum - view.width) / 2).coerceAtLeast(0)
+        if (extraV == 0 && extraH == 0) return
+        view.touchDelegate = android.view.TouchDelegate(
+            android.graphics.Rect(-extraH, -extraV, view.width + extraH, view.height + extraV),
+            view
         )
     }
 
@@ -146,13 +198,19 @@ class BmBottomBar @JvmOverloads constructor(
         lutEnabled: Boolean,
         exposureAuto: Boolean,
         focusAuto: Boolean,
-        cleanScreen: Boolean
+        cleanScreen: Boolean,
+        aeLocked: Boolean = false,
+        awbLocked: Boolean = false,
+        oisActive: Boolean = false
     ) {
         guidesButton.active = monitorsActive
         lutButton.active = lutEnabled
         exposureButton.active = exposureAuto
         autoFocusButton.active = focusAuto
         cleanScreenButton.active = cleanScreen
+        aeLockButton.active = aeLocked
+        awbLockButton.active = awbLocked
+        oisButton.active = oisActive
     }
 
     private fun dp(value: Int): Int =
