@@ -136,26 +136,34 @@ class BmSettings {
      */
     fun rggbGains(): RggbChannelVector {
         val (whiteR, whiteG, whiteB) = kelvinToRgb(kelvin)
-        // El sensor lee el gris del iluminante como (whiteR, whiteG, whiteB), así
-        // que la corrección que lo lleva a neutro es la INVERSA de esa respuesta,
-        // ya normalizada a G = 1 para no tocar la exposición. A 5600 K sale
-        // R > 1 (se sube el rojo) y B < 1 (se baja el azul). El signo contrario
-        // hundía R y B por debajo de 1 y acentuaba la dominante verde.
+        // 1) Inverso de la respuesta del iluminante, con el verde como referencia.
         val safeG = max(0.02f, whiteG)
         var red = safeG / max(0.02f, whiteR)
         var green = 1.0f
         var blue = safeG / max(0.02f, whiteB)
 
+        // 2) Eje de tinte sobre las ganancias de color (el verde es la
+        // referencia y no se toca, como en FreeDcam):
+        //   - Positivo (magenta): se SUBEN R y B, que es lo que quita verde.
+        //   - Negativo (verde): se BAJAN R y B, que es lo que deja verde.
         val t = tint.coerceIn(TINT_MIN, TINT_MAX) / 100f
         if (t > 0f) {
-            // Magenta: menos verde. El azul necesita más corrección que el rojo
-            // porque la matriz de color del sensor lo atenúa en relación al
-            // verde; el desplazamiento se reparte en proporción a esa asimetría.
             red *= (1f + 0.8f * t)
             blue *= (1f + 2.4f * t)
         } else if (t < 0f) {
-            // Verde: menos rojo y azul.
-            green *= (1f + t)
+            red *= (1f + t)
+            blue *= (1f + t)
+        }
+
+        // 3) Todos los canales >= 1.0. Camera2 documenta que las ganancias por
+        // debajo de 1.0 producen artefactos de color, y es la convención que usa
+        // FreeDcam (`MINCAP = 1.0`): se reescala el vector para que el canal más
+        // bajo quede exactamente en 1.0 y se conserven las relaciones R:G:B.
+        val floor = minOf(red, green, blue, 1.0f)
+        if (floor > 0f) {
+            red /= floor
+            green /= floor
+            blue /= floor
         }
 
         return RggbChannelVector(
