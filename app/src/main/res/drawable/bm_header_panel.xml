@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Barra flotante de la cabecera: fondo casi opaco, esquinas redondeadas y borde
+  sutil, como la barra superior de la app de referencia.
+-->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#CC121214" />
+    <corners android:radius="12dp" />
+    <stroke
+        android:width="1dp"
+        android:color="#2A2A2E" />
+</shape>

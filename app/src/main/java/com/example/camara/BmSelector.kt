@@ -75,7 +75,12 @@ class BmSelector @JvmOverloads constructor(
         gravity = Gravity.CENTER
         isClickable = true
         isFocusable = true
-        setPadding(dp(2), dp(2), dp(2), dp(2))
+        setPadding(dp(2), dp(2), dp(2), dp(6))
+        // Área táctil garantizada de 48 dp por altura mínima, no por TouchDelegate.
+        // Poner el delegado sobre la propia vista provoca recursión infinita
+        // (TouchDelegate.onTouchEvent -> View.onTouchEvent -> delegado -> ...) y
+        // terminaba en StackOverflowError al tocar cualquier celda de la cabecera.
+        minimumHeight = dp(MIN_TOUCH_DP)
 
         val captionRow = LinearLayout(context).apply {
             orientation = HORIZONTAL
@@ -140,36 +145,6 @@ class BmSelector @JvmOverloads constructor(
             visibility = INVISIBLE
         }
         addView(underline, LayoutParams(dp(14), dp(1.5f).toInt()).apply { topMargin = dp(2) })
-
-        // Área táctil holgada: si el bloque es más bajo que 48 dp, se extiende el
-        // toque por encima y por debajo sin mover nada en pantalla. Se aplica
-        // sobre el propio bloque (el delegado se evalúa contra la extensión del
-        // hijo, así que el rectángulo ampliado es el área sensible del bloque).
-        addOnLayoutChangeListener { view, _, _, _, _, _, _, _, _ ->
-            expandTouchTarget(view)
-        }
-    }
-
-    /**
-     * Amplía el área sensible del bloque hasta 48 dp de alto como mínimo.
-     *
-     * Con la cabecera en dos filas cada parámetro mide poco más de 40 dp, así que
-     * los toques en el borde superior o inferior caían fuera y los botones
-     * parecían no responder al primer intento.
-     */
-    private fun expandTouchTarget(view: View) {
-        if (view.width <= 0 || view.height <= 0) return
-        val minimum = dp(MIN_TOUCH_DP)
-        val extraVertical = ((minimum - view.height) / 2).coerceAtLeast(0)
-        val extraHorizontal = ((minimum - view.width) / 2).coerceAtLeast(0)
-        if (extraVertical == 0 && extraHorizontal == 0) return
-        view.touchDelegate = android.view.TouchDelegate(
-            android.graphics.Rect(
-                -extraHorizontal, -extraVertical,
-                view.width + extraHorizontal, view.height + extraVertical
-            ),
-            view
-        )
     }
 
     private fun applyValueColor() {

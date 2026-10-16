@@ -100,6 +100,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var histogramView: BmHistogramView
     private lateinit var stereoMeters: BmStereoMetersView
     private lateinit var storagePanel: BmStoragePanel
+
+    /** Botonera flotante de lentes sobre el visor. */
+    private lateinit var lensPills: BmLensPills
     private lateinit var stabilizerIcon: android.widget.ImageView
     private lateinit var rightHandle: BmRailHandle
     private lateinit var panelRow: LinearLayout
@@ -180,6 +183,17 @@ class MainActivity : AppCompatActivity() {
 
     /** El HAL publica `CONTROL_ZOOM_RATIO`; si no, se omite el ajuste. */
     private var zoomRatioSupported = false
+
+    /** Evita encolar más de una actualización del repeating request a la vez. */
+    private var updatePending = false
+
+    /**
+     * Matriz de calibración del sensor (`SENSOR_COLOR_TRANSFORM1`), leída al
+     * abrir la cámara. Es la que exige `CONTROL_AWB_MODE_OFF` con
+     * `COLOR_CORRECTION_MODE_TRANSFORM_MATRIX` para que MediaTek acepte
+     * `COLOR_CORRECTION_GAINS` sin teñir la imagen. Null si el sensor no la publica.
+     */
+    private var sensorColorTransform: ColorSpaceTransform? = null
 
     private val executor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -276,6 +290,7 @@ class MainActivity : AppCompatActivity() {
         histogramView = findViewById(R.id.bmHistogram)
         stereoMeters = findViewById(R.id.bmStereoMeters)
         storagePanel = findViewById(R.id.bmStorage)
+        lensPills = findViewById(R.id.bmLensPills)
         stabilizerIcon = findViewById(R.id.bmStabilizer)
         rightHandle = findViewById(R.id.bmRailHandleRight)
         panelRow = findViewById(R.id.panelRow)
@@ -310,14 +325,33 @@ class MainActivity : AppCompatActivity() {
             override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
                 surface.setDefaultBufferSize(previewSize.width, previewSize.height)
                 previewArea.post { applyPreviewAspect() }
-                // El visor se abre sin esperar al layout: en cuanto hay superficie
-                // se arranca la cámara, y el contenedor se dimensiona en paralelo.
-                openCamera()
+                // La superficie puede ser NUEVA (primer arranque, o vuelta del
+                // segundo plano, donde onSurfaceTextureDestroyed liberó la
+                // anterior). Hay que rehacer la sesión con este Surface: si no, la
+                // sesión sigue escribiendo al Surface muerto y el visor se queda
+                // negro para siempre, porque openCamera() ya no puede reabrir un
+                // dispositivo que sigue abierto.
+                cameraHandler.post { rebindPreviewSurface(surface) }
             }
 
-            override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {}
+            override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {
+                previewArea.post { applyPreviewTransform() }
+            }
 
-            override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean = true
+            /**
+             * El TextureView libera el SurfaceTexture anterior; la sesión se
+             * reconstruye en [onSurfaceTextureAvailable] con el nuevo.
+             */
+            override fun onSurfaceTextureDestroyed(surface: SurfaceTexture): Boolean {
+                cameraHandler.post {
+                    runCatching { captureSession?.stopRepeating() }
+                    runCatching { captureSession?.close() }
+                    captureSession = null
+                    previewSurface?.release()
+                    previewSurface = null
+                }
+                return true
+            }
 
             override fun onSurfaceTextureUpdated(surface: SurfaceTexture) {}
         }
@@ -667,6 +701,7 @@ class MainActivity : AppCompatActivity() {
             oisActive = settings.opticalStabilization
         )
         header.setLutActive(settings.lutEnabled)
+        refreshLensPills()
     }
 
     // ---------------------------------------------------------------- top bar
@@ -900,6 +935,36 @@ class MainActivity : AppCompatActivity() {
         if (supportedPhysicalIds.contains(PHYSICAL_UW)) labels += BmSettings.LENS_UW
         labels += BmSettings.LENS_LOGICAL
         return labels
+    }
+
+    /** Refresca la botonera flotante de lentes con la lente activa. */
+    private fun refreshLensPills() {
+        val physical = mutableListOf<String>()
+        if (supportedPhysicalIds.contains(PHYSICAL_UW)) physical += BmLensPills.LENS_UW
+        if (supportedPhysicalIds.contains(PHYSICAL_MAIN)) physical += BmLensPills.LENS_MAIN
+        if (supportedPhysicalIds.contains(PHYSICAL_TELE)) physical += BmLensPills.LENS_TELE
+        if (lensPills.childCount == 0) {
+            lensPills.setAvailableLenses(physical, supportsFps(60))
+        }
+        val logical = settings.lensKey == BmSettings.LENS_LOGICAL
+        lensPills.setActive(
+            activeKey = if (logical) BmLensPills.LENS_LOGICAL else settings.lensKey,
+            fps60 = logical && settings.fps == 60
+        )
+    }
+
+    /** Conecta las píldoras de lente con el cambio de sensor. */
+    private fun wireLensPills() {
+        lensPills.onLensSelected = { key ->
+            selectLens(key)
+            refreshLensPills()
+        }
+        lensPills.onFps60Selected = {
+            settings.fps = 60
+            if (settings.lensKey != BmSettings.LENS_LOGICAL) selectLens(BmSettings.LENS_LOGICAL)
+            refreshLensPills()
+            pushSettings()
+        }
     }
 
     private fun fpsValues(): List<Int> {
@@ -1308,6 +1373,15 @@ class MainActivity : AppCompatActivity() {
                     } ?: "—"
                     val toneModes: IntArray? = chars.get(CameraCharacteristics.TONEMAP_AVAILABLE_TONE_MAP_MODES)
                     zoomRatioSupported = chars.keys.any { it.name == "CONTROL_ZOOM_RATIO" }
+                    // Matriz de calibración del sensor para el balance manual.
+                    sensorColorTransform = chars.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM1)
+                        ?: chars.get(CameraCharacteristics.SENSOR_COLOR_TRANSFORM2)
+                    Log.i(
+                        TAG_CAMERA,
+                        "PROBE colorTransform=" +
+                            (sensorColorTransform?.toString()?.replace("\n", " ") ?: "no publicada") +
+                            " awbPresets=${chars.get(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES)?.size}"
+                    )
                     contrastCurveSupported =
                         toneModes?.any { it == CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE } == true
                     // Rango real de ganancias RGGB del sensor: acota el balance de
@@ -1344,6 +1418,23 @@ class MainActivity : AppCompatActivity() {
         cameraHandler.post { createSessionInternal(recorderSurface) }
     }
 
+    /**
+     * Rehace la previsualización sobre una superficie nueva.
+     *
+     * Se ejecuta siempre en el hilo de cámara. Si el dispositivo ya está abierto
+     * no se reabre —volver a llamar a `openCamera` falla y dejaba el visor en
+     * negro—: sólo se cambia el destino de la sesión.
+     */
+    private fun rebindPreviewSurface(surfaceTexture: SurfaceTexture) {
+        runCatching { captureSession?.stopRepeating() }
+        runCatching { captureSession?.close() }
+        captureSession = null
+        previewSurface?.release()
+        previewSurface = Surface(surfaceTexture)
+        Log.i(TAG_CAMERA, "Superficie del visor reenlazada (dispositivo=${cameraDevice != null})")
+        if (cameraDevice != null) createSessionInternal(null) else openCameraInternal()
+    }
+
     private fun createSessionInternal(recorderSurface: Surface?) {
         val device = cameraDevice ?: return
         // Nunca se crea una sesión sin superficie lista: en MediaTek eso deja el
@@ -1356,8 +1447,9 @@ class MainActivity : AppCompatActivity() {
             Log.w(TAG_CAMERA, "createSession aplazado: surfaceTexture nulo")
             return
         }
-        val surface = Surface(texture)
-        previewSurface = surface
+        // Se reutiliza el Surface ya enlazado si es el de esta misma textura; sólo
+        // se crea uno nuevo cuando no hay ninguno (primer arranque).
+        val surface = previewSurface ?: Surface(texture).also { previewSurface = it }
 
         val outputs = ArrayList<OutputConfiguration>()
         val previewConfig = OutputConfiguration(surface)
@@ -1512,7 +1604,9 @@ class MainActivity : AppCompatActivity() {
             else CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_OFF
         )
         // Exposición: manual (ISO y obturación de BmSettings) o automática del
-        // dispositivo. En automático se sigue leyendo lo que aplica el sensor.
+        // dispositivo. En AUTO NO se envían SENSOR_EXPOSURE_TIME ni
+        // SENSOR_SENSITIVITY: si se mandan, el HAL de MediaTek ignora el AE. Los
+        // valores reales que decide la cámara se leen del CaptureResult.
         if (settings.autoExposure) {
             builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON)
         } else {
@@ -1520,13 +1614,18 @@ class MainActivity : AppCompatActivity() {
             builder.set(CaptureRequest.SENSOR_SENSITIVITY, settings.iso)
             builder.set(CaptureRequest.SENSOR_EXPOSURE_TIME, settings.shutterNs)
         }
-        builder.set(CaptureRequest.SENSOR_FRAME_DURATION, 1_000_000_000L / max(1, settings.fps))
+        // La duración de fotograma la gobierna el AE en automático; en manual se
+        // fija para respetar los fps pedidos.
+        if (!settings.autoExposure) {
+            builder.set(CaptureRequest.SENSOR_FRAME_DURATION, 1_000_000_000L / max(1, settings.fps))
+        }
         bestFpsRange(settings.fps)?.let { builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
         // Bloqueos de exposición y balance (OpenCamera, CameraController2).
         // En Camera2 estos dos ejes son booleanos: true congela el valor que
-        // acaba de resolver el algoritmo automático, sin pasar a manual.
-        builder.set(CaptureRequest.CONTROL_AE_LOCK, settings.aeLock)
-        builder.set(CaptureRequest.CONTROL_AWB_LOCK, settings.awbLock)
+        // acaba de resolver el algoritmo automático. El bloqueo de AE sólo tiene
+        // sentido con el AE activo.
+        builder.set(CaptureRequest.CONTROL_AE_LOCK, settings.aeLock && settings.autoExposure)
+        builder.set(CaptureRequest.CONTROL_AWB_LOCK, settings.awbLock && settings.autoWb)
         // Estabilización óptica del objetivo, sumada a la electrónica.
         builder.set(
             CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
@@ -1540,30 +1639,29 @@ class MainActivity : AppCompatActivity() {
         // Balance de blancos: AWB nativo del ISP (insignia «A») o ganancias RGGB
         // calculadas con Planck + tinte.
         if (settings.autoWb) {
+            // Arranque en automático: el ISP del Vivo resuelve el punto blanco y
+            // mantiene su matriz calibrada (FAST), que es el color de fábrica.
             builder.set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
         } else {
+            // Manual: AWB_MODE_OFF + COLOR_CORRECTION_MODE_FAST y sólo las
+            // ganancias RGGB. Medido en el Vivo X300:
+            //  - TRANSFORM_MATRIX con SENSOR_COLOR_TRANSFORM1 hunde el rojo
+            //    (visor R/G = 0,117) porque esa matriz lleva el RGB del sensor a
+            //    CIE XYZ, no al espacio lineal de sRGB que espera
+            //    COLOR_CORRECTION_TRANSFORM.
+            //  - FAST conserva la matriz calibrada del HAL y acepta las
+            //    ganancias, que es el camino de PhotonCamera (ParamController).
             builder.set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_OFF)
-            // COLOR_CORRECTION_MODE_FAST, como PhotonCamera en su balance manual
-            // (ParamController): la matriz de color calibrada del HAL sigue
-            // aplicándose y sólo se inyectan las ganancias RGGB. Antes se forzaba
-            // TRANSFORM_MATRIX con una identidad inventada, que anulaba la
-            // calibración del sensor.
             builder.set(CaptureRequest.COLOR_CORRECTION_MODE, CaptureRequest.COLOR_CORRECTION_MODE_FAST)
             builder.set(CaptureRequest.COLOR_CORRECTION_GAINS, settings.rggbGains())
         }
-        // Enfoque: AF continuo por defecto (nítido sin tocar nada); MF manual con
-        // distancia de foco. El tap-to-focus usa AF_MODE_AUTO + disparo puntual.
+        // Enfoque: AF continuo por defecto; MF con distancia de foco. El
+        // disparo de tap-to-focus se hace aparte con un capture() puntual, NUNCA
+        // dentro del repeatingRequest: si se deja AF_TRIGGER_START ahí, el HAL
+        // reinicia el enfoque en cada fotograma y nunca llega a enfocar.
         if (settings.autoFocus) {
-            builder.set(
-                CaptureRequest.CONTROL_AF_MODE,
-                if (tapFocusActive) CaptureRequest.CONTROL_AF_MODE_AUTO
-                else CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO
-            )
-            builder.set(
-                CaptureRequest.CONTROL_AF_TRIGGER,
-                if (tapFocusActive) CaptureRequest.CONTROL_AF_TRIGGER_START
-                else CaptureRequest.CONTROL_AF_TRIGGER_IDLE
-            )
+            builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_VIDEO)
+            builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_IDLE)
             focusRegions?.let { builder.set(CaptureRequest.CONTROL_AF_REGIONS, it) }
         } else {
             builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_OFF)
@@ -1580,13 +1678,38 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** Reenvía los ajustes actuales al sensor en el hilo de cámara. */
+    /**
+     * Preset de balance de blancos del HAL más cercano a la temperatura pedida.
+     *
+     * Es el respaldo cuando el sensor no publica matriz de calibración: los
+     * presets los aplica el ISP, así que no pueden teñir la imagen.
+     */
+    private fun presetAwbMode(kelvin: Int): Int = when {
+        kelvin <= 3000 -> CaptureRequest.CONTROL_AWB_MODE_INCANDESCENT
+        kelvin <= 4200 -> CaptureRequest.CONTROL_AWB_MODE_FLUORESCENT
+        kelvin <= 5200 -> CaptureRequest.CONTROL_AWB_MODE_DAYLIGHT
+        kelvin <= 6500 -> CaptureRequest.CONTROL_AWB_MODE_CLOUDY_DAYLIGHT
+        else -> CaptureRequest.CONTROL_AWB_MODE_SHADE
+    }
+
+    /** Reenvía los ajustes actuales al sensor en el hilo de cámara.
+     *
+     * Se sincroniza y se coalesce: arrastrar la regla graduada genera decenas de
+     * llamadas por segundo y cada `setRepeatingRequest` es una petición al HAL.
+     * Aquí sólo se deja una actualización pendiente en la cola del hilo de
+     * cámara, así que el HAL recibe como mucho una por ciclo y ninguna desde el
+     * hilo de interfaz.
+     */
+    @Synchronized
     private fun pushSettings() {
-        if (Looper.myLooper() == cameraThread.looper) {
-            pushSettingsInternal()
-        } else {
-            cameraHandler.post { pushSettingsInternal() }
-        }
+        if (updatePending) return
+        updatePending = true
+        cameraHandler.post(updatePreviewRunnable)
+    }
+
+    private val updatePreviewRunnable = Runnable {
+        synchronized(this) { updatePending = false }
+        pushSettingsInternal()
     }
 
     private fun pushSettingsInternal() {
@@ -1597,9 +1720,10 @@ class MainActivity : AppCompatActivity() {
             session.setRepeatingRequest(builder.build(), captureCallback, cameraHandler)
             Log.i(
                 TAG_METER,
-                "PUSH iso=%d shutter=%s wb=%dK tint=%d fps=%d focus=%.2f lens=%s autoWb=%b %s".format(
+                "PUSH iso=%d shutter=%s wb=%dK tint=%d fps=%d focus=%.2f lens=%s autoAe=%b autoWb=%b %s".format(
                     Locale.US, settings.iso, settings.shutterLabel, settings.kelvin, settings.tint,
-                    settings.fps, settings.focusDiopters, settings.lensKey, settings.autoWb,
+                    settings.fps, settings.focusDiopters, settings.lensKey,
+                    settings.autoExposure, settings.autoWb,
                     if (settings.autoWb) "AWB=ISP" else settings.gainsLabel()
                 )
             )
@@ -1883,13 +2007,28 @@ class MainActivity : AppCompatActivity() {
         val bh = previewSize.height.toFloat()
 
         val matrix = Matrix()
-        if (previewRotation % 180 == 90 && vw > 0f && vh > 0f && bw > 0f && bh > 0f) {
-            // Búfer 1920x1080 en vista 405x720: T(202.5, 0) · R(90) · S(0.375)
-            val scale = vh / bw
-            matrix.postTranslate(vw / 2f, vh / 2f)
-            matrix.postRotate(previewRotation.toFloat())
-            matrix.postScale(scale, scale)
-            matrix.postTranslate(-bh / 2f, -bw / 2f)
+        if (vw > 0f && vh > 0f && bw > 0f && bh > 0f) {
+            if (previewRotation % 180 == 90) {
+                // Con giro, el búfer intercambia ejes: ocupa (bh x bw) en la vista.
+                // La escala es única y se toma la mayor de las dos exigencias para
+                // que la imagen CUBRA el contenedor (recorte centrado). Con
+                // `vh / bw` la imagen quedaba más estrecha que el marco y aparecían
+                // bandas negras.
+                val scale = maxOf(vw / bh, vh / bw)
+                matrix.postTranslate(vw / 2f, vh / 2f)
+                matrix.postRotate(previewRotation.toFloat())
+                matrix.postScale(scale, scale)
+                matrix.postTranslate(-bh / 2f, -bw / 2f)
+            } else {
+                // Sin giro, la escala sigue siendo ÚNICA: se cubre el contenedor
+                // con el lado más exigente y se centra (recorte, nunca estirado).
+                // Sin esto, un búfer 16:9 dentro de un contenedor 4:3 se estiraba
+                // y la imagen salía achatada en apaisado.
+                val scale = maxOf(vw / bw, vh / bh)
+                matrix.postTranslate(vw / 2f, vh / 2f)
+                matrix.postScale(scale, scale)
+                matrix.postTranslate(-bw / 2f, -bh / 2f)
+            }
         }
         textureView.setTransform(matrix)
         previewMatrix.set(matrix)
@@ -1951,17 +2090,37 @@ class MainActivity : AppCompatActivity() {
         val top = (centerY - side / 2).coerceIn(active.top, (active.bottom - side).coerceAtLeast(active.top))
         val rect = Rect(left, top, left + side, top + side)
         focusRegions = arrayOf(MeteringRectangle(rect, MeteringRectangle.METERING_WEIGHT_MAX))
-        tapFocusActive = true
         Log.i(
             TAG_CAMERA,
             "Tap-to-focus en (%.2f, %.2f) -> region $rect".format(normalizedX, normalizedY)
         )
+        // 1) La región se deja puesta para el modo continuo.
         pushSettings()
-        // Afinar con AF_MODE_AUTO y disparar; después volver a AF continuo.
-        mainHandler.postDelayed({
-            tapFocusActive = false
-            if (settings.autoFocus) pushSettings()
-        }, 1500)
+        // 2) Disparo puntual: un único capture() con AF_MODE_AUTO + TRIGGER_START.
+        cameraHandler.post {
+            val session = captureSession
+            val builder = requestBuilder
+            if (session != null && builder != null) {
+                try {
+                    builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_AUTO)
+                    builder.set(CaptureRequest.CONTROL_AF_TRIGGER, CaptureRequest.CONTROL_AF_TRIGGER_START)
+                    builder.set(CaptureRequest.CONTROL_AF_REGIONS, focusRegions)
+                    session.capture(
+                        builder.build(),
+                        null,
+                        cameraHandler
+                    )
+                    Log.i(TAG_CAMERA, "Tap-to-focus: disparo AF puntual enviado")
+                } catch (t: android.hardware.camera2.CameraAccessException) {
+                    Log.w(TAG_CAMERA, "Disparo AF puntual falló: ${t.message}")
+                } catch (t: IllegalArgumentException) {
+                    Log.w(TAG_CAMERA, "Disparo AF puntual rechazado: ${t.message}")
+                } finally {
+                    // 3) El repeating vuelve a continuo con el disparador en IDLE.
+                    pushSettings()
+                }
+            }
+        }
     }
 
     private fun toggleRecording() {

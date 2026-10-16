@@ -63,8 +63,14 @@ class BmSettings {
     var bitrateOverrideMbps: Int = 0         // 0 = el caudal propio del formato
 
     // --- Modos automáticos reales del sensor (se activan desde la barra inferior) ---
-    var autoExposure: Boolean = false        // AE del dispositivo: ISO y obturación solos
-    var autoWb: Boolean = false              // AWB del dispositivo: balance solos
+    /**
+     * Exposición y balance arrancan en AUTOMÁTICO, como al abrir la app de
+     * referencia: el ISP del Vivo resuelve ISO, obturación y punto blanco, así
+     * que ni la exposición ni el color pueden salir mal de fábrica. Al tocar ISO,
+     * OBT., BAL. B. o TIN. se pasa a manual con las ganancias propias.
+     */
+    var autoExposure: Boolean = true         // AE del dispositivo: ISO y obturación solos
+    var autoWb: Boolean = true               // AWB del dispositivo: balance solos
     var autoIris: Boolean = false            // apertura: informativo, la lente es fija
 
     val focusLabel: String
@@ -138,25 +144,26 @@ class BmSettings {
     /**
      * Ganancias RGGB para una temperatura de color y un tinte.
      *
-     * Portado de FreeDcam:
-     *  1. Respuesta del iluminante desde la tabla `wbct_lookup` de FreeDcam
-     *     (interpolada) y, fuera de su rango, la aproximacion de Planck.
-     *  2. `WbHandler.getRGBToDouble`: `(2/255) * color + 1`, con el suelo
-     *     `MINCAP = 1.0`. El verde se divide por 2 porque el patron RGGB lleva
-     *     dos canales verdes.
-     *  3. Eje de tinte sobre los canales de color, con el verde como referencia:
-     *     positivo (magenta) sube R y B; negativo (verde) los baja.
-     *  4. Todos los canales quedan en 1.0 o por encima, que es la convencion de
-     *     FreeDcam y lo que recomienda Camera2 (por debajo de 1.0 aparecen
-     *     artefactos de color), conservando las relaciones R:G:B.
+     * Respuesta del iluminante desde la tabla `wbct_lookup` de FreeDcam
+     * (interpolada) y, fuera de su rango, la aproximación de Planck. El eje de
+     * tinte actúa sobre los canales de color con el verde como referencia:
+     * positivo (magenta) sube R y B; negativo (verde) los baja.
+     *
+     * La normalización deja el VERDE en 1.0, que es la corrección de punto
+     * blanco real (la que usan OpenCamera y Camera2), de modo que las ganancias
+     * quedan alrededor de 1.0. Escalar hasta dejar el canal más bajo en 1.0
+     * —lectura literal del `MINCAP` de FreeDcam, cuyo eje propio va de 1.0 a
+     * 3.0— llevaba R hasta 2.9 en este sensor y el ISP recortaba los canales:
+     * la imagen salía con distorsión de color y franjas.
      */
     fun rggbGains(): RggbChannelVector {
         val (whiteR, whiteG, whiteB) = kelvinToRgb(kelvin)
 
-        var red = (2.0f / 255.0f) * whiteR + 1.0f
-        var green = ((2.0f / 255.0f) * whiteG + 1.0f) / 2.0f
-        var blue = (2.0f / 255.0f) * whiteB + 1.0f
-        if (green < MIN_GAIN_CAP) green = MIN_GAIN_CAP
+        // Inverso de la respuesta del iluminante, normalizado sobre el verde.
+        val safeG = max(1f, whiteG)
+        var red = safeG / max(1f, whiteR)
+        var green = 1.0f
+        var blue = safeG / max(1f, whiteB)
 
         val t = tint.coerceIn(TINT_MIN, TINT_MAX) / 100f
         if (t > 0f) {
@@ -165,13 +172,6 @@ class BmSettings {
         } else if (t < 0f) {
             red *= (1f + t)
             blue *= (1f + t)
-        }
-
-        val floor = minOf(red, green, blue, 1.0f)
-        if (floor > 0f) {
-            red /= floor
-            green /= floor
-            blue /= floor
         }
 
         return RggbChannelVector(

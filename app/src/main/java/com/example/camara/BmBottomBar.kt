@@ -155,36 +155,13 @@ class BmBottomBar @JvmOverloads constructor(
             setIcon(R.drawable.ic_bm_stabilizer)
             setOnClickListener { onOisToggle?.invoke() }
         }
-        endCluster.addView(aeLockButton, LayoutParams(dp(40), dp(40)).apply { marginStart = dp(6) })
-        endCluster.addView(awbLockButton, LayoutParams(dp(40), dp(40)).apply { marginStart = dp(6) })
-        endCluster.addView(oisButton, LayoutParams(dp(40), dp(40)).apply { marginStart = dp(6) })
+        endCluster.addView(aeLockButton, LayoutParams(dp(48), dp(48)).apply { marginStart = dp(6) })
+        endCluster.addView(awbLockButton, LayoutParams(dp(48), dp(48)).apply { marginStart = dp(6) })
+        endCluster.addView(oisButton, LayoutParams(dp(48), dp(48)).apply { marginStart = dp(6) })
 
         addView(
             endCluster,
             LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f).apply { gravity = Gravity.END }
-        )
-
-        // Respuesta al primer toque en todos los botones de la fila.
-        listOf(
-            guidesButton, focusTargetButton, exposureButton,
-            autoFocusButton, cleanScreenButton, aeLockButton, awbLockButton, oisButton
-        ).forEach { button ->
-            button.addOnLayoutChangeListener { view, _, _, _, _, _, _, _, _ ->
-                expandTouchTarget(view)
-            }
-        }
-    }
-
-    /** Amplía el área sensible de un botón hasta 48 dp sin moverlo en pantalla. */
-    private fun expandTouchTarget(view: View) {
-        if (view.width <= 0 || view.height <= 0) return
-        val minimum = dp(48)
-        val extraV = ((minimum - view.height) / 2).coerceAtLeast(0)
-        val extraH = ((minimum - view.width) / 2).coerceAtLeast(0)
-        if (extraV == 0 && extraH == 0) return
-        view.touchDelegate = android.view.TouchDelegate(
-            android.graphics.Rect(-extraH, -extraV, view.width + extraH, view.height + extraV),
-            view
         )
     }
 
