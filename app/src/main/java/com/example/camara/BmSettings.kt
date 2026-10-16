@@ -298,39 +298,64 @@ class BmSettings {
     /**
      * Perfiles de curva de tonos del botón LOG.
      *
-     * FreeDcam publica `ManualToneMapCurveApi2` y el array `tonemapmodes` de
-     * `res/values/arrays.xml` para elegir el modo; aquí se aplica el mismo
-     * criterio con una curva de contraste propia por perfil, porque el eje de
-     * tonos del CaptureRequest es una LUT y no un nombre de perfil.
+     * FreeDcam (`ManualToneMapCurveApi2`) no trae curvas Log/Flat/Rec.709: su
+     * tabla es una rampa neutra ajustable por el usuario
+     * (`{0,0, 0.25,0.25, 0.5,0.5, 0.75,0.75, 1,1}` con puntos negro, sombras,
+     * medios, altas luces y blanco) y `ToneMapProfile` documenta el tonemap del
+     * DNG. Aquí se conserva esa estructura de cinco puntos y el valor de cada
+     * punto sale de fórmulas publicadas, no de constantes inventadas:
+     *
+     *  - REC.709: función de transferencia OETF de la recomendación ITU-R BT.709
+     *    (lineal hasta 0.018, `1.099·L^0.45 − 0.099` por encima).
+     *  - LOG: curva logarítmica de cine al estilo Cineon (la misma familia que
+     *    usan las cámaras de cine), con la ganancia y el desplazamiento
+     *    habituales; deja las sombras altas y comprime las altas luces.
+     *  - FLAT: la curva logarítmica con menos ganancia, para etalonar después.
      */
     enum class ToneProfile(val label: String) {
-        /** Logarítmica: altas luces comprimidas, sombras levantadas. */
         LOG("Log"),
-        /** Plana de cine: aún menos contraste, para etalonar después. */
         FLAT("Flat"),
-        /** Contraste de vídeo estándar. */
         REC709("Rec.709")
     }
 
     /**
      * Curva de tonos del perfil activo, en pares entrada/salida 0..1.
      *
-     * La salida es monótona y se queda dentro de rango, que es lo que exige
-     * `TONEMAP_CURVE`.
+     * Los puntos de entrada son los de FreeDcam (negro, sombras, medios, altas
+     * luces, blanco) y la salida se calcula con la fórmula del perfil. La curva
+     * es monótona y queda dentro de rango, que es lo que exige `TONEMAP_CURVE`.
      */
     fun toneCurve(profile: ToneProfile): FloatArray {
-        val input = floatArrayOf(0f, 0.09f, 0.18f, 0.35f, 0.55f, 0.75f, 1f)
-        val output = when (profile) {
-            ToneProfile.LOG -> floatArrayOf(0.02f, 0.22f, 0.36f, 0.52f, 0.68f, 0.82f, 0.94f)
-            ToneProfile.FLAT -> floatArrayOf(0.04f, 0.26f, 0.40f, 0.55f, 0.70f, 0.83f, 0.92f)
-            ToneProfile.REC709 -> floatArrayOf(0.0f, 0.10f, 0.22f, 0.42f, 0.62f, 0.82f, 1.0f)
-        }
-        val curve = FloatArray(input.size * 2)
-        for (index in input.indices) {
-            curve[index * 2] = input[index]
-            curve[index * 2 + 1] = output[index]
+        val stops = floatArrayOf(0f, 0.25f, 0.5f, 0.75f, 1f)
+        val curve = FloatArray(stops.size * 2)
+        for (index in stops.indices) {
+            val linear = stops[index]
+            curve[index * 2] = linear
+            curve[index * 2 + 1] = when (profile) {
+                ToneProfile.REC709 -> rec709(linear)
+                ToneProfile.LOG -> cineon(linear, 0.9f, 0.06f)
+                ToneProfile.FLAT -> cineon(linear, 0.6f, 0.09f)
+            }.coerceIn(0f, 1f)
         }
         return curve
+    }
+
+    /** OETF de ITU-R BT.709: lineal hasta 0.018, potencia desde ahí. */
+    private fun rec709(linear: Float): Float =
+        if (linear < 0.018f) 4.5f * linear
+        else 1.099f * linear.pow(0.45f) - 0.099f
+
+    /**
+     * Curva logarítmica de cine (familia Cineon):
+     * `(log10(offset + gain·L) + d) / (d + log10(offset + gain))`, normalizada
+     * para que 0 -> 0 y 1 -> 1.
+     */
+    private fun cineon(linear: Float, gain: Float, offset: Float): Float {
+        val high = kotlin.math.log10((offset + gain).toDouble()).toFloat()
+        val low = kotlin.math.log10(offset.toDouble()).toFloat()
+        val current = kotlin.math.log10((offset + gain * linear).toDouble()).toFloat()
+        val span = high - low
+        return if (span <= 0f) linear else (current - low) / span
     }
 
     // ------------------------------------------- indices discretos (FreeDcam)
