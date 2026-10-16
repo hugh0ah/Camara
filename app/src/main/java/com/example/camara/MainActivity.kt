@@ -1492,28 +1492,33 @@ class MainActivity : AppCompatActivity() {
     /**
      * Relación de aspecto del contenedor del visor.
      *
-     * El contenedor es siempre vertical o apaisado según la pantalla, nunca ambos:
-     *  - En vertical se usa la proporción inversa a la del sensor, que es la que
-     *    mantiene la geometría sin deformar:
-     *      · Open Gate 4:3  -> 3:4  (height = width * 4 / 3)
-     *      · 16:9 / UHD     -> 9:16 (height = width * 16 / 9)
-     *  - En horizontal se usa la relación nativa del sensor (4:3 o 16:9) y el
-     *    sobrante se recorta en la matriz de [applyPreviewTransform].
+     * Es la única fuente de la geometría: el contenedor `previewFrame` (y con él
+     * el `TextureView`, la superposición y el recuadro de enfoque, que lo llenan
+     * con `match_parent`) se dimensiona con la proporción exacta de los píxeles
+     * que entrega el sensor. Así la matriz del visor sólo tiene que girar, nunca
+     * escalar ni estirar.
+     *
+     *  - Vertical: proporción inversa a la del sensor, porque el búfer se gira
+     *    90°. 16:9 / UHD -> 9:16 (alto = ancho * 16 / 9) y Open Gate 4:3 -> 3:4
+     *    (alto = ancho * 4 / 3). Si no cabe en el alto disponible se invierte el
+     *    cálculo sobre ese alto.
+     *  - Horizontal: proporción nativa del sensor (16:9 o 4:3).
      */
     private fun applyPreviewAspect() {
-        val available = previewArea.height
         val areaWidth = previewArea.width
-        if (available <= 0 || areaWidth <= 0) return
+        val available = previewArea.height
+        if (areaWidth <= 0 || available <= 0) return
         val frameAspect = previewSize.width.toFloat() / previewSize.height.toFloat()
-        if (frameAspect <= 0f) return
-        // Vertical: la proporción se invierte respecto al sensor (3:4 / 9:16).
-        val aspect = if (isPortraitDisplay()) 1f / frameAspect else frameAspect
+        if (!frameAspect.isFinite() || frameAspect <= 0f) return
+
+        // Ancho / alto que debe tener el contenedor en pantalla.
+        val targetRatio = if (isPortraitDisplay()) 1f / frameAspect else frameAspect
         val margin = dp(7)
         var width = (areaWidth - margin * 2).coerceAtLeast(1)
-        var height = (width * aspect).toInt()
+        var height = (width / targetRatio).toInt()
         if (height > available) {
             height = available
-            width = (height / aspect).toInt().coerceAtLeast(1)
+            width = (height * targetRatio).toInt().coerceAtLeast(1)
         }
         val params = previewFrame.layoutParams
         if (params.width != width || params.height != height) {
@@ -1522,8 +1527,9 @@ class MainActivity : AppCompatActivity() {
             previewFrame.layoutParams = params
             Log.i(
                 TAG_CAMERA,
-                "Visor ${width}x${height} relación=${"%.3f".format(Locale.US, aspect)} " +
-                    "sensor=${previewSize.width}x${previewSize.height} vertical=${isPortraitDisplay()}"
+                "Visor ${width}x${height} contenedor=${"%.4f".format(Locale.US, width.toFloat() / height)} " +
+                    "sensor=${previewSize.width}x${previewSize.height} " +
+                    "búfer=${"%.4f".format(Locale.US, frameAspect)} vertical=${isPortraitDisplay()}"
             )
         }
     }
@@ -1562,46 +1568,68 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Gira el contenido del visor para mostrarlo derecho y sin deformar.
+     * Transformación del visor: SOLO giro, nunca escala.
      *
-     * `TextureView` estira su búfer hasta los límites de la vista, así que la
-     * matriz se aplica SOBRE ese estirado: hay que deshacerlo (factores bh/vh y
-     * bw/vw) y después aplicar el giro de 90° del sensor y una única escala
-     * uniforme que haga que el cuadro quepa entero. Al ser uniforme, la relación
-     * de aspecto se mantiene: nunca se achata la imagen.
+     * El contenedor ya tiene exactamente la proporción de los píxeles del búfer
+     * (ver [applyPreviewAspect]), así que `TextureView` mapea búfer -> vista de
+     * forma natural y la matriz no acumula factores de estirado. Cuando el sensor
+     * viene girado 90° (caso habitual en Android) el búfer apaisado tiene que
+     * rotarse para llenar el contenedor vertical: esa rotación, y nada más, es lo
+     * que se aplica aquí. Con el contenedor bien dimensionado, girar 90° equivale
+     * a un intercambio de ejes sin deformación.
      */
     private fun applyPreviewTransform() {
+        previewRotation = effectivePreviewRotation()
+        val rotated = previewRotation % 180 == 90
+
+        // Con la proporción del contenedor igual a la del búfer ya girado, la
+        // geometría encaja sin escalar: vw/vh == bh/bw. Si el layout todavía no
+        // se ha resuelto con esas dimensiones se corrige y se reintenta, de modo
+        // que nunca quede un estirado visible en pantalla.
         val vw = textureView.width.toFloat()
         val vh = textureView.height.toFloat()
         val bw = previewSize.width.toFloat()
         val bh = previewSize.height.toFloat()
-        if (vw <= 0f || vh <= 0f || bw <= 0f || bh <= 0f) return
-
-        previewRotation = effectivePreviewRotation()
-        overlayView.overlayRotation = previewRotation
-
-        val swapped = previewRotation % 180 == 90
-        // Lado del búfer que acaba ocupando el ancho de la vista.
-        val longSide = if (swapped) bh else bw
-        val shortSide = if (swapped) bw else bh
-        val fitScale = minOf(vw / longSide, vh / shortSide)
+        val laidOut = vw > 0f && vh > 0f && bw > 0f && bh > 0f
+        val fits = !laidOut || kotlin.math.abs(vw * bw - vh * bh) < 1f
 
         val matrix = Matrix()
-        // Separa los ejes del estirado que aplica la propia TextureView.
-        matrix.setScale(bh / vh, bw / vw)
-        // Centra el giro y escala de forma uniforme (sin deformación).
-        matrix.postTranslate(-vw / 2f, -vh / 2f)
-        matrix.postRotate(previewRotation.toFloat())
-        matrix.postScale(fitScale, fitScale)
-        matrix.postTranslate(vw / 2f, vh / 2f)
+        if (rotated && laidOut) {
+            // Ejemplo búfer 1920x1080 en vista 405x720: T(202.5, 0) · R(90) · S(0.375)
+            // lleva el búfer exactamente sobre el contenedor. Sin estirar.
+            val scale = vh / bw
+            matrix.postTranslate(vw / 2f, vh / 2f)
+            matrix.postRotate(previewRotation.toFloat())
+            matrix.postScale(scale, scale)
+            matrix.postTranslate(-bh / 2f, -bw / 2f)
+        }
         textureView.setTransform(matrix)
         previewMatrix.set(matrix)
+        overlayView.overlayRotation = previewRotation
         Log.i(
             TAG_CAMERA,
             "Visor ${vw.toInt()}x${vh.toInt()} buffer ${bw.toInt()}x${bh.toInt()} giro=$previewRotation " +
-                "escala=${"%.3f".format(Locale.US, fitScale)} sensor=$sensorOrientation " +
-                "físico=$deviceRotation pantalla=${display?.rotation ?: -1}"
+                "encaja=$fits sensor=$sensorOrientation físico=$deviceRotation " +
+                "pantalla=${display?.rotation ?: -1}"
         )
+        if (!fits) {
+            val frameAspect = bw / bh
+            val targetRatio = if (isPortraitDisplay()) 1f / frameAspect else frameAspect
+            val width = (vw * targetRatio).toInt().coerceAtLeast(1)
+            val height = (vw / targetRatio).toInt().coerceAtLeast(1)
+            (previewFrame.layoutParams as? FrameLayout.LayoutParams)?.let {
+                if (it.width != width || it.height != height) {
+                    it.width = width
+                    it.height = height
+                    previewFrame.layoutParams = it
+                    Log.w(
+                        TAG_CAMERA,
+                        "Contenedor corregido en la matriz: ${width}x${height} (giro=$previewRotation)"
+                    )
+                    textureView.post { applyPreviewTransform() }
+                }
+            }
+        }
     }
 
     /**
