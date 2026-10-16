@@ -103,6 +103,9 @@ class MainActivity : AppCompatActivity() {
 
     /** Botonera flotante de lentes sobre el visor. */
     private lateinit var lensPills: BmLensPills
+
+    /** Selector directo de resolución. */
+    private lateinit var resolutionChips: BmResolutionChips
     private lateinit var stabilizerIcon: android.widget.ImageView
     private lateinit var rightHandle: BmRailHandle
     private lateinit var panelRow: LinearLayout
@@ -294,6 +297,7 @@ class MainActivity : AppCompatActivity() {
         stereoMeters = findViewById(R.id.bmStereoMeters)
         storagePanel = findViewById(R.id.bmStorage)
         lensPills = findViewById(R.id.bmLensPills)
+        resolutionChips = findViewById(R.id.bmResolutionChips)
         stabilizerIcon = findViewById(R.id.bmStabilizer)
         rightHandle = findViewById(R.id.bmRailHandleRight)
         panelRow = findViewById(R.id.panelRow)
@@ -521,6 +525,8 @@ class MainActivity : AppCompatActivity() {
         bottomBar.onExposureToggle = { setAutoExposure(!settings.autoExposure) }
         bottomBar.onAutoFocusToggle = { toggleFocusMode() }
         bottomBar.onCleanScreen = { setOverlaysVisible(!settings.overlaysVisible) }
+        wireLensPills()
+        wireResolutionChips()
         // Bloqueos AE/AWB y estabilización óptica (OpenCamera,
         // CameraController2): se aplican al CaptureRequest en el acto.
         bottomBar.onAeLock = {
@@ -954,6 +960,17 @@ class MainActivity : AppCompatActivity() {
             activeKey = if (logical) BmLensPills.LENS_LOGICAL else settings.lensKey,
             fps60 = logical && settings.fps == 60
         )
+    }
+
+    /** Conecta el selector de resolución y lo deja marcado en el formato activo. */
+    private fun wireResolutionChips() {
+        resolutionChips.bind(BmSettings.Quality.entries.toList())
+        resolutionChips.setActive(settings.quality)
+        resolutionChips.onQualitySelected = { quality ->
+            setQuality(quality)
+            resolutionChips.setActive(settings.quality)
+        }
+        Log.i(TAG_CAMERA, "Selector de resolución: ${BmSettings.Quality.entries.size} chips")
     }
 
     /** Conecta las píldoras de lente con el cambio de sensor. */
