@@ -14,8 +14,10 @@ import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
 import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.TotalCaptureResult
+import android.hardware.camera2.params.ColorSpaceTransform
 import android.hardware.camera2.params.MeteringRectangle
 import android.hardware.camera2.params.OutputConfiguration
+import android.hardware.camera2.params.RggbChannelVector
 import android.hardware.camera2.params.SessionConfiguration
 import android.hardware.camera2.params.TonemapCurve
 import android.net.Uri
@@ -192,6 +194,22 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Sondea el archivo de comandos cada 500 ms.
+     *
+     * Es el canal de verificación en vivo en este dispositivo: `logcat` no
+     * entrega las líneas de la app y `am broadcast` no llega al puente, así que
+     * los comandos se dejan en un archivo del directorio de la app.
+     */
+    private val commandPoller = object : Runnable {
+        override fun run() {
+            BmDiagnostics.takeCommand(this@MainActivity)?.let { command ->
+                handleDebugCommand(command)
+            }
+            mainHandler.postDelayed(this, 500)
+        }
+    }
+
     /** Timecode real: 00:00:00:00 en reposo y contando durante la grabación. */
     private fun updateTimecode() {
         val millis = if (isRecording) System.currentTimeMillis() - recordStartedAt else 0L
@@ -279,6 +297,7 @@ class MainActivity : AppCompatActivity() {
 
         analyzer = BmMonitorAnalyzer(textureView, settings).apply {
             onSnapshot = { snapshot ->
+                lastSnapshot = snapshot
                 overlayView.setMonitorBitmap(snapshot.overlay)
                 if (settings.histogram) histogramView.update(snapshot)
                 val now = System.currentTimeMillis()
@@ -311,6 +330,9 @@ class MainActivity : AppCompatActivity() {
         BmDebugBridge.attach { command -> runOnUiThread { handleDebugCommand(command) } }
         // Permite dirigir la app desde adb: am start ... --es cmd "iso:3200"
         intent?.getStringExtra("cmd")?.let { command -> mainHandler.post { handleDebugCommand(command) } }
+        // Y también por archivo, porque este dispositivo no entrega logcat:
+        //   adb shell 'echo wb:5600 > .../files/bm-cmd.txt'
+        mainHandler.post(commandPoller)
 
         cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
         if (hasCameraPermission()) {
@@ -858,9 +880,61 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    /**
+     * Vuelca el estado de color real a un archivo legible desde adb, porque en
+     * este dispositivo (HyperOS) `logcat` no entrega las líneas de la app.
+     *
+     *   adb shell cat /sdcard/Android/data/com.example.camara/files/bm-diag.log
+     */
+    private fun dumpDiagnostics(origin: String) {
+        val gains = settings.rggbGains()
+        val applied = lastAppliedGains
+        val line = buildString {
+            append(
+                "%-5s wb=%dK tint=%d autoWb=%b mode=%s | gains R=%.4f Ge=%.4f Go=%.4f B=%.4f | win=%s..%s".format(
+                    Locale.US, origin, settings.kelvin, settings.tint, settings.autoWb,
+                    if (settings.autoExposure) "AE" else "M",
+                    gains.red, gains.greenEven, gains.greenOdd, gains.blue,
+                    BmSettings.gainMin, BmSettings.gainMax
+                )
+            )
+            if (applied != null) {
+                append(
+                    " | aplicado R=%.4f Ge=%.4f Go=%.4f B=%.4f".format(
+                        applied.red, applied.greenEven, applied.greenOdd, applied.blue
+                    )
+                )
+            } else {
+                append(" | aplicado n/d")
+            }
+            lastSnapshot?.let { snapshot ->
+                val r = meanChannel(snapshot.redHistogram)
+                val g = meanChannel(snapshot.greenHistogram)
+                val b = meanChannel(snapshot.blueHistogram)
+                append(
+                    " | visor R=%.1f G=%.1f B=%.1f  R/G=%.3f B/G=%.3f".format(
+                        r, g, b, r / max(0.01, g), b / max(0.01, g)
+                    )
+                )
+            } ?: append(" | visor n/d")
+        }
+        BmDiagnostics.write(this, line)
+        Log.i(TAG_METER, line)
+    }
+
+    /** Media de un histograma de 256 niveles, para medir la dominante de color. */
+    private fun meanChannel(histogram: IntArray): Double {
+        var total = 0L
+        var weighted = 0L
+        histogram.forEachIndexed { level, count ->
+            total += count
+            weighted += level.toLong() * count
+        }
+        return if (total == 0L) 0.0 else weighted.toDouble() / total
+    }
+
     /** Comandos del puente de depuración (BmDebugReceiver, solo build debug). */
-    private fun handleDebugCommand(command: String) {
-        if (captureSession == null) {
+    private fun handleDebugCommand(command: String) {        if (captureSession == null) {
             Log.i(TAG_CAMERA, "DEBUG en espera de sesión: $command")
             pendingDebugCommand = command
             return
@@ -894,10 +968,12 @@ class MainActivity : AppCompatActivity() {
             "wb" -> parts.getOrNull(1)?.toIntOrNull()?.let {
                 settings.kelvin = it.coerceIn(2000, 12000)
                 pushSettings()
+                dumpDiagnostics("cmd")
             }
             "tint" -> parts.getOrNull(1)?.toIntOrNull()?.let {
-                settings.tint = it.coerceIn(-100, 100)
+                settings.tint = it.coerceIn(BmSettings.TINT_MIN, BmSettings.TINT_MAX)
                 pushSettings()
+                dumpDiagnostics("cmd")
             }
             "focus" -> parts.getOrNull(1)?.toFloatOrNull()?.let {
                 settings.focusDiopters = it.coerceIn(0f, settings.focusMinDiopters)
@@ -961,6 +1037,14 @@ class MainActivity : AppCompatActivity() {
                     "ae" -> setAutoExposure(enabled)
                     "wb" -> setAutoWb(enabled)
                     "af" -> if (settings.autoFocus != enabled) toggleFocusMode()
+                }
+            }
+            // Diagnóstico en archivo: cat /sdcard/Android/data/com.example.camara/files/bm-diag.log
+            "diag" -> {
+                if (parts.getOrNull(1)?.equals("clear", ignoreCase = true) == true) {
+                    BmDiagnostics.clear(this)
+                } else {
+                    dumpDiagnostics("cmd")
                 }
             }
             "rail" -> setRailOpen(parts.getOrNull(1)?.equals("on", ignoreCase = true) == true)
@@ -1122,6 +1206,21 @@ class MainActivity : AppCompatActivity() {
                     val toneModes: IntArray? = chars.get(CameraCharacteristics.TONEMAP_AVAILABLE_TONE_MAP_MODES)
                     contrastCurveSupported =
                         toneModes?.any { it == CaptureRequest.TONEMAP_MODE_CONTRAST_CURVE } == true
+                    // Rango real de ganancias RGGB del sensor: acota el balance de
+                    // blancos manual.
+                    // Android no publica el rango de COLOR_CORRECTION_GAINS, así
+                    // que se acota a una ventana segura y se estrecha en caliente
+                    // si el HAL rechaza un valor (ver pushSettings).
+                    val vendorGainMax = chars.keys
+                        .firstOrNull { it.name.contains("MAX_GAIN", ignoreCase = true) }
+                        ?.let { runCatching { chars.get(it) as? Int }.getOrNull() }
+                    settings.setGainWindow(0.25f, (vendorGainMax?.coerceIn(1, 16)?.toFloat()) ?: 4.0f)
+                    val awbModes = chars.get(CameraCharacteristics.CONTROL_AWB_AVAILABLE_MODES)
+                    Log.i(
+                        TAG_CAMERA,
+                        "PROBE awbModes=${awbModes?.joinToString()} gainWindow=" +
+                            "${BmSettings.gainMin}..${BmSettings.gainMax} vendorMaxKey=${vendorGainMax ?: "n/d"}"
+                    )
                     Log.i(TAG_CAMERA, "PROBE tonemapModes=${toneModes?.joinToString()} curvaLog=$contrastCurveSupported")
                     Log.i(
                         TAG_CAMERA,
@@ -1236,6 +1335,7 @@ class MainActivity : AppCompatActivity() {
             val appliedIso = result.get(CaptureResult.SENSOR_SENSITIVITY)
             val appliedExposure = result.get(CaptureResult.SENSOR_EXPOSURE_TIME)
             val appliedGains = result.get(CaptureResult.COLOR_CORRECTION_GAINS)
+            lastAppliedGains = appliedGains
             val appliedFocus = result.get(CaptureResult.LENS_FOCUS_DISTANCE)
             val appliedAfMode = result.get(CaptureResult.CONTROL_AF_MODE)
             val appliedAfState = result.get(CaptureResult.CONTROL_AF_STATE)
@@ -1278,6 +1378,12 @@ class MainActivity : AppCompatActivity() {
     private var lastAutoDisplayUpdate = 0L
     private var autoDisplayDirty = false
 
+    /** Últimas ganancias RGGB que confirmó el sensor en el CaptureResult. */
+    private var lastAppliedGains: RggbChannelVector? = null
+
+    /** Último fotograma analizado, para medir la dominante de color en vivo. */
+    private var lastSnapshot: BmMonitorAnalyzer.Snapshot? = null
+
     private fun buildRequest(recorderSurface: Surface?): CaptureRequest.Builder? {
         val device = cameraDevice ?: return null
         val preview = previewSurface ?: return null
@@ -1307,7 +1413,8 @@ class MainActivity : AppCompatActivity() {
         }
         builder.set(CaptureRequest.SENSOR_FRAME_DURATION, 1_000_000_000L / max(1, settings.fps))
         bestFpsRange(settings.fps)?.let { builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
-        // Balance de blancos: matriz de corrección propia o AWB del dispositivo.
+        // Balance de blancos: AWB nativo del ISP (insignia «A») o ganancias RGGB
+        // calculadas con Planck + tinte.
         if (settings.autoWb) {
             builder.set(CaptureRequest.CONTROL_AWB_MODE, CaptureRequest.CONTROL_AWB_MODE_AUTO)
         } else {
@@ -1353,12 +1460,30 @@ class MainActivity : AppCompatActivity() {
             session.setRepeatingRequest(builder.build(), captureCallback, mainHandler)
             Log.i(
                 TAG_METER,
-                "PUSH iso=%d shutter=%s wb=%dK tint=%d fps=%d focus=%.2f lens=%s".format(
+                "PUSH iso=%d shutter=%s wb=%dK tint=%d fps=%d focus=%.2f lens=%s autoWb=%b %s".format(
                     Locale.US, settings.iso, settings.shutterLabel, settings.kelvin, settings.tint,
-                    settings.fps, settings.focusDiopters, settings.lensKey
+                    settings.fps, settings.focusDiopters, settings.lensKey, settings.autoWb,
+                    if (settings.autoWb) "AWB=ISP" else settings.gainsLabel()
                 )
             )
         } catch (t: Throwable) {
+            // El HAL rechazó petición: si el problema es la ganancia RGGB, se
+            // estrecha la ventana al rango neutro y se reintenta una vez.
+            if (!settings.autoWb && BmSettings.narrowGainWindow()) {
+                Log.w(
+                    TAG_METER,
+                    "Ganancias fuera de rango (${t.message}); ventana -> " +
+                        "${BmSettings.gainMin}..${BmSettings.gainMax}, reintentando"
+                )
+                fillRequest(builder)
+                try {
+                    session.setRepeatingRequest(builder.build(), captureCallback, mainHandler)
+                    Log.i(TAG_METER, "PUSH reintentado con ${settings.gainsLabel()}")
+                    return
+                } catch (retry: Throwable) {
+                    Log.e(TAG_CAMERA, "Reintento de ganancias falló: ${retry.message}")
+                }
+            }
             Log.e(TAG_CAMERA, "No se pudo aplicar el ajuste: ${t.message}")
         }
     }

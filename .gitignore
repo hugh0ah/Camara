@@ -84,3 +84,6 @@ firebase_options.dart
 
 # === Artefactos locales de analisis ===
 artifacts/
+
+# === Temporales de compilacion en el espacio de trabajo ===
+.tmpbuild/

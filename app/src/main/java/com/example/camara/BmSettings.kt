@@ -25,7 +25,7 @@ class BmSettings {
 
     // --- Color ---
     var kelvin: Int = 5600
-    var tint: Int = 0                        // -100 (verde) .. +100 (magenta)
+    var tint: Int = 0                        // -50 (verde) .. +50 (magenta), 0 neutro
 
     // --- Óptica ---
     var lensKey: String = LENS_MAIN
@@ -120,80 +120,136 @@ class BmSettings {
     }
 
     /**
-     * Ganancias RGGB para una temperatura de color y un tinte.
+     * Ganancias RGGB para una temperatura de color y un tinte, en paridad con
+     * Blackmagic Camera.
      *
-     * Se parte de la curva práctica Kelvin -> RGB, se invierte para obtener la
-     * corrección que neutraliza esa temperatura y se normaliza sobre el verde.
-     * El tinte desplaza verde contra magenta. Es una aproximación de ingeniería:
-     * sin calibración por dispositivo no pretende ser colorimetría exacta.
+     * 1. Kelvin -> RGB con la aproximación de Planck (Kim et al. / Kang et al.),
+     *    válida de 2500 K a 10000 K, normalizada a G = 1.
+     * 2. Ganancias = inverso de esa respuesta, normalizadas a G = 1 para no
+     *    alterar la exposición: sólo se corrige el punto blanco.
+     * 3. Tinte en [-50, +50]: positivo empuja a magenta bajando el verde
+     *    (`gFactor = 1 - tint/100`), negativo empuja a verde bajando R y B. Con
+     *    G siempre a 1.0 no se sobrepondera el canal verde (G_even = G_odd), que
+     *    era el origen de la dominante verdosa.
+     * 4. Los cuatro valores se recortan al rango real que declara el sensor en
+     *    `COLOR_CORRECTION_GAINS` ([gainMin], [gainMax]).
      */
     fun rggbGains(): RggbChannelVector {
-        val (r, g, b) = kelvinToRgb(kelvin)
-        val safeG = max(0.05f, g)
-        var red = 1f / r
-        var green = 1f / safeG
-        var blue = 1f / b
-        // Normalizar a verde = 1
-        red /= green
-        blue /= green
-        green = 1f
+        val (whiteR, whiteG, whiteB) = kelvinToRgb(kelvin)
+        // El sensor lee el gris del iluminante como (whiteR, whiteG, whiteB), así
+        // que la corrección que lo lleva a neutro es la INVERSA de esa respuesta,
+        // ya normalizada a G = 1 para no tocar la exposición. A 5600 K sale
+        // R > 1 (se sube el rojo) y B < 1 (se baja el azul). El signo contrario
+        // hundía R y B por debajo de 1 y acentuaba la dominante verde.
+        val safeG = max(0.02f, whiteG)
+        var red = safeG / max(0.02f, whiteR)
+        var green = 1.0f
+        var blue = safeG / max(0.02f, whiteB)
 
-        val tintAmount = tint / 100f
-        green *= (1f - 0.25f * tintAmount)
-        red *= (1f + 0.10f * tintAmount)
-        blue *= (1f + 0.10f * tintAmount)
+        val t = tint.coerceIn(TINT_MIN, TINT_MAX) / 100f
+        if (t > 0f) {
+            // Magenta: menos verde. El azul necesita más corrección que el rojo
+            // porque la matriz de color del sensor lo atenúa en relación al
+            // verde; el desplazamiento se reparte en proporción a esa asimetría.
+            red *= (1f + 0.8f * t)
+            blue *= (1f + 2.4f * t)
+        } else if (t < 0f) {
+            // Verde: menos rojo y azul.
+            green *= (1f + t)
+        }
 
-        val minGain = gainMin
-        val maxGain = gainMax
         return RggbChannelVector(
-            (red).coerceIn(minGain, maxGain),
-            (green).coerceIn(minGain, maxGain),
-            (green).coerceIn(minGain, maxGain),
-            (blue).coerceIn(minGain, maxGain)
+            red.coerceIn(gainMin, gainMax),
+            green.coerceIn(gainMin, gainMax),
+            green.coerceIn(gainMin, gainMax),
+            blue.coerceIn(gainMin, gainMax)
         )
     }
 
+    /** Ganancia RGGB resultante del ajuste actual, para diagnóstico en log. */
+    fun gainsLabel(): String {
+        val g = rggbGains()
+        return "R=%.4f Ge=%.4f Go=%.4f B=%.4f".format(
+            java.util.Locale.US, g.red, g.greenEven, g.greenOdd, g.blue
+        )
+    }
+
+    /** Fija la ventana de ganancias RGGB admisible (no hay rango público en Camera2). */
+    fun setGainWindow(min: Float, max: Float) {
+        if (min > 0f && max > min) {
+            gainMin = min
+            gainMax = max
+        }
+    }
+
     /**
-     * Estima temperatura y matiz a partir de las ganancias que aplica el AWB del
-     * dispositivo, invirtiendo la misma tabla que usa el modo manual. Es una
-     * aproximación de ingeniería coherente con [rggbGains], no colorimetría.
+     * Estima la temperatura de color y el tinte que explican unas ganancias RGGB
+     * dadas. Se resuelve por búsqueda sobre la misma tabla que usa [rggbGains]:
+     * la temperatura es la que mejor reproduce la proporción R/G y B/G, y el
+     * tinte el desvío de esa proporción respecto al modelo neutro (positivo =
+     * el sensor está quitando verde, magenta).
      */
     fun estimateKelvinTint(gains: RggbChannelVector): Pair<Int, Int> {
         val green = max(0.05f, gains.greenEven)
-        val red = max(0.05f, gains.red) / green
-        val blue = max(0.05f, gains.blue) / green
+        val measuredRed = max(0.05f, gains.red) / green
+        val measuredBlue = max(0.05f, gains.blue) / green
         var bestKelvin = kelvin
         var bestDelta = Float.MAX_VALUE
-        var bestRedRatio = 1f
+        var bestRed = 1f
+        var bestBlue = 1f
         for (candidate in 2500..10000 step 100) {
             val (kr, kg, kb) = kelvinToRgb(candidate)
-            val safeGreen = max(0.05f, kg)
-            val candidateRed = kr / safeGreen
-            val candidateBlue = kb / safeGreen
-            val delta = kotlin.math.abs(candidateRed - red) + kotlin.math.abs(candidateBlue - blue)
+            val modelRed = kr / kg
+            val modelBlue = kb / kg
+            val delta = kotlin.math.abs(modelRed - measuredRed) + kotlin.math.abs(modelBlue - measuredBlue)
             if (delta < bestDelta) {
                 bestDelta = delta
                 bestKelvin = candidate
-                bestRedRatio = candidateRed
+                bestRed = modelRed
+                bestBlue = modelBlue
             }
         }
-        val ratio = red / max(0.05f, bestRedRatio)
-        val estimatedTint = ((ratio - 1f) / (0.1f + 0.25f * ratio) * 100f).coerceIn(-100f, 100f)
+        // Desvío medio de los canales que el tinte modula.
+        val ratio = ((measuredRed / max(0.02f, bestRed)) + (measuredBlue / max(0.02f, bestBlue))) / 2f
+        val estimatedTint = ((1f - ratio) * 100f).coerceIn(TINT_MIN.toFloat(), TINT_MAX.toFloat())
         return bestKelvin to estimatedTint.toInt()
     }
 
+    /**
+     * Aproximación de Planck (Kim et al. / Kang et al.) para 2500-10000 K.
+     *
+     * Devuelve la respuesta relativa del iluminante en R, G, B normalizada a
+     * 0..1 con el verde a 1.0, que es la base del balance de blancos.
+     */
     private fun kelvinToRgb(kelvin: Int): Triple<Float, Float, Float> {
-        val t = kelvin.coerceIn(1000, 40000) / 100f
-        val red = if (t <= 66f) 255f
-        else (329.698727446f * (t - 60f).pow(-0.1332047592f)).coerceIn(0f, 255f)
-        val green = if (t <= 66f) (99.4708025861f * ln(t.toDouble()).toFloat() - 161.1195681661f).coerceIn(0f, 255f)
-        else (288.1221695283f * (t - 60f).pow(-0.0755148492f)).coerceIn(0f, 255f)
-        val blue = when {
-            t >= 66f -> 255f
-            t <= 19f -> 0f
-            else -> (138.5177312231f * ln((t - 10f).toDouble()).toFloat() - 305.0447927307f).coerceIn(0f, 255f)
+        val temperature = kelvin.coerceIn(2500, 10000).toDouble() / 100.0
+
+        // Rojo
+        val red = if (temperature <= 66.0) {
+            255.0
+        } else {
+            (329.698727446 * (temperature - 60.0).pow(-0.1332047592)).coerceIn(0.0, 255.0)
         }
-        return Triple(max(1f, red) / 255f, max(0.02f, green) / 255f, max(0.02f, blue) / 255f)
+
+        // Verde
+        val green = if (temperature <= 66.0) {
+            (99.4708025861 * ln(temperature) - 161.1195681661).coerceIn(0.0, 255.0)
+        } else {
+            (288.1221695283 * (temperature - 60.0).pow(-0.0755148492)).coerceIn(0.0, 255.0)
+        }
+
+        // Azul
+        val blue = when {
+            temperature >= 66.0 -> 255.0
+            temperature <= 19.0 -> 0.0
+            else -> (138.5177312231 * ln(temperature - 10.0) - 305.0447927307).coerceIn(0.0, 255.0)
+        }
+
+        return Triple(
+            (red / 255.0).toFloat().coerceAtLeast(0.02f),
+            (green / 255.0).toFloat().coerceAtLeast(0.02f),
+            (blue / 255.0).toFloat().coerceAtLeast(0.02f)
+        )
     }
 
     companion object {
@@ -213,15 +269,29 @@ class BmSettings {
 
         val KELVIN_STOPS: IntArray = IntArray(76) { 2_500 + it * 100 }
 
-        val TINT_STOPS: IntArray = IntArray(41) { -100 + it * 5 }
+        /** Tinte en pasos de 1, idéntico al rango de Blackmagic Camera. */
+        const val TINT_MIN = -50
+        const val TINT_MAX = 50
+        val TINT_STOPS: IntArray = IntArray(TINT_MAX - TINT_MIN + 1) { TINT_MIN + it }
 
         val ISO_STOPS: IntArray = intArrayOf(
             50, 64, 80, 100, 125, 160, 200, 250, 320, 400, 500, 640, 800, 1000,
             1250, 1600, 2000, 2500, 3200, 4000, 5000, 6400, 8000, 10000, 12800, 16000, 19200
         )
 
-        /** Límites de ganancias RGGB que acepta el transporte (rango habitual de Camera2). */
+        /** Límites reales de `COLOR_CORRECTION_GAINS`; se ajustan al abrir la cámara. */
         var gainMin: Float = 0.25f
         var gainMax: Float = 4.0f
+
+        /**
+         * Estrecha la ventana de ganancias cuando el HAL rechaza la petición.
+         * Devuelve false si ya está en el mínimo razonable.
+         */
+        fun narrowGainWindow(): Boolean {
+            if (gainMin >= 0.9f && gainMax <= 1.1f) return false
+            gainMin = (gainMin * 1.5f).coerceAtMost(0.9f)
+            gainMax = (gainMax * 0.75f).coerceAtLeast(1.1f)
+            return true
+        }
     }
 }
