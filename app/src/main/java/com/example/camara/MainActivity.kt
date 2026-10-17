@@ -116,6 +116,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var previewFrame: FrameLayout
     private lateinit var bottomContainer: LinearLayout
     private lateinit var zoomDetector: ScaleGestureDetector
+    private lateinit var photonIsoControl: TextView
+    private lateinit var photonShutterControl: TextView
+    private lateinit var photonWbControl: TextView
+    private lateinit var photonFocusControl: TextView
 
     /** Tamaño real del stream de previsualización (define la relación de aspecto). */
     private var previewSize: Size = Size(1920, 1080)
@@ -190,6 +194,8 @@ class MainActivity : AppCompatActivity() {
 
     /** Índices de obturación válidos, generados de la tabla de FreeDcam. */
     private var shutterStops: LongArray = BmSettings.SUTTER_STOPS
+    private var isoControlSupported = false
+    private var shutterControlSupported = false
 
     /** El HAL publica `CONTROL_ZOOM_RATIO`; si no, se omite el ajuste. */
     private var zoomRatioSupported = false
@@ -319,6 +325,14 @@ class MainActivity : AppCompatActivity() {
         previewArea = findViewById(R.id.previewArea)
         previewFrame = findViewById(R.id.previewFrame)
         bottomContainer = findViewById(R.id.bottomContainer)
+        photonIsoControl = findViewById(R.id.photonIsoControl)
+        photonShutterControl = findViewById(R.id.photonShutterControl)
+        photonWbControl = findViewById(R.id.photonWbControl)
+        photonFocusControl = findViewById(R.id.photonFocusControl)
+        photonIsoControl.setOnClickListener { if (isoControlSupported && !isRecording) openDial("ISO") }
+        photonShutterControl.setOnClickListener { if (shutterControlSupported && !isRecording) openDial("SHUTTER") }
+        photonWbControl.setOnClickListener { if (!isRecording) openDial("WB") }
+        photonFocusControl.setOnClickListener { if (!isRecording) openDial("FOCUS") }
 
         applyWindowInsets()
 
@@ -1472,11 +1486,13 @@ class MainActivity : AppCompatActivity() {
                         settings.isoMin = it.lower
                         settings.isoMax = it.upper
                     }
+                    isoControlSupported = isoRange != null
                     isoStops = settings.buildIsoStops(settings.isoMin, settings.isoMax)
                     exposureRange?.let {
                         settings.shutterMinNs = it.lower
                         settings.shutterMaxNs = it.upper
                     }
+                    shutterControlSupported = exposureRange != null
                     shutterStops = settings.buildShutterStops(settings.shutterMinNs, settings.shutterMaxNs)
                     // El valor activo se ajusta al índice válido más cercano.
                     settings.iso = isoStops[settings.nearestIndex(isoStops, settings.iso)]
@@ -1491,6 +1507,11 @@ class MainActivity : AppCompatActivity() {
                     )
                     Log.i(TAG_CAMERA, "High Speed publicado por HAL: fps=$highSpeedVideoFpsRanges sizes=" +
                         highSpeedSizes.joinToString { "${it.width}x${it.height}" })
+                    runOnUiThread {
+                        photonIsoControl.visibility = if (isoControlSupported) View.VISIBLE else View.GONE
+                        photonShutterControl.visibility = if (shutterControlSupported) View.VISIBLE else View.GONE
+                        updateParameterDisplay()
+                    }
                     settings.focusMinDiopters = focusMin ?: 0f
                     settings.apertureLabel = apertures?.firstOrNull()?.let { value ->
                         String.format(Locale.US, "f/%.1f", value)
@@ -2044,6 +2065,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateParameterDisplay() {
+        if (::photonIsoControl.isInitialized) {
+            photonIsoControl.text = "ISO\n" + if (settings.autoExposure) "AUTO" else settings.iso
+            photonShutterControl.text = "SHUTTER\n" + if (settings.autoExposure) "AUTO" else settings.shutterLabel
+            photonWbControl.text = "WB\n" + if (settings.autoWb) "AUTO" else "${settings.kelvin}K"
+            photonFocusControl.text = "FOCUS\n${settings.focusLabel}"
+        }
         topBar.setValues(
             lens = settings.lensKey,
             fps = "${settings.fps}",

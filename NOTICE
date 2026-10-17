@@ -6,6 +6,11 @@ PhotonCamera
 Repository: https://github.com/eszdman/PhotonCamera
 Commit: b2eff821a858033515eb2700e7292befecc95225
 License: GNU General Public License v3.0
+Manual-control palette reference:
+- circularbarlib/src/main/res/layout/manual_palette.xml
+Changes: adapted the option-cell/toggle structure to the existing Camera2 views;
+PhotonCamera's KnobView, data binding, JNI, DI and module-specific dependencies
+were not copied.
 Copied/adapted paths currently present in this project:
 - app/src/main/res/drawable/ic_iso.xml
 - app/src/main/res/drawable/ic_iso_selected.xml
