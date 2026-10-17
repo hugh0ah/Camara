@@ -87,7 +87,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private val settings = BmSettings()
-    private lateinit var textureView: TextureView
+    private lateinit var textureView: AutoFitTextureView
     private lateinit var topBar: BmTopBar
     private lateinit var header: BmHeaderBar
     private lateinit var toolRail: BmToolBar
@@ -186,6 +186,7 @@ class MainActivity : AppCompatActivity() {
 
     /** El HAL publica `CONTROL_ZOOM_RATIO`; si no, se omite el ajuste. */
     private var zoomRatioSupported = false
+    private var highSpeedVideoFpsRanges: List<Range<Int>> = emptyList()
 
     /** Escala real que aplicó el último transform del visor, para diagnóstico. */
     private var lastTransformScale = 1f
@@ -1385,6 +1386,8 @@ class MainActivity : AppCompatActivity() {
                 val apertures = chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES)
                 val fpsRanges = chars.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
                 val map = chars.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+                val highSpeedRanges = map?.highSpeedVideoFpsRanges?.toList().orEmpty()
+                val highSpeedSizes = map?.highSpeedVideoSizes?.toList().orEmpty()
                 val recorderSizes = map?.getOutputSizes(android.media.MediaRecorder::class.java)
                     ?.sortedByDescending { it.width.toLong() * it.height }
                     ?.take(5)
@@ -1395,12 +1398,14 @@ class MainActivity : AppCompatActivity() {
                         "focusMin=$focusMin apertures=${apertures?.joinToString()} fps=${fpsRanges?.joinToString()} " +
                         "sensorOrientation=${chars.get(CameraCharacteristics.SENSOR_ORIENTATION)} " +
                         "focales=${chars.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.joinToString()} " +
-                        "mediaRecorderSizes=$recorderSizes"
+                        "mediaRecorderSizes=$recorderSizes highSpeedFps=$highSpeedRanges " +
+                        "highSpeedSizes=${highSpeedSizes.joinToString { "${it.width}x${it.height}" }}"
                 )
                 if (id == LOGICAL_CAMERA_ID) {
                     supportedPhysicalIds.clear()
                     supportedPhysicalIds += physical
                     availableFpsRanges = fpsRanges?.toList() ?: emptyList()
+                    highSpeedVideoFpsRanges = highSpeedRanges
                     characteristics = chars
                     sensorOrientation =
                         chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
@@ -1434,6 +1439,8 @@ class MainActivity : AppCompatActivity() {
                             "(${shutterStops.first()}ns..${shutterStops.last()}ns) " +
                             "activos iso=${settings.iso} shutter=${settings.shutterLabel}"
                     )
+                    Log.i(TAG_CAMERA, "High Speed publicado por HAL: fps=$highSpeedVideoFpsRanges sizes=" +
+                        highSpeedSizes.joinToString { "${it.width}x${it.height}" })
                     settings.focusMinDiopters = focusMin ?: 0f
                     settings.apertureLabel = apertures?.firstOrNull()?.let { value ->
                         String.format(Locale.US, "f/%.1f", value)
@@ -2017,6 +2024,10 @@ class MainActivity : AppCompatActivity() {
 
         // Ancho / alto que debe tener el contenedor en pantalla.
         val targetRatio = frameAspect
+        textureView.setAspectRatio(
+            if (isPortraitDisplay()) previewSize.height else previewSize.width,
+            if (isPortraitDisplay()) previewSize.width else previewSize.height
+        )
         val margin = dp(7)
         var width = (areaWidth - margin * 2).coerceAtLeast(1)
         var height = (width / targetRatio).toInt()
