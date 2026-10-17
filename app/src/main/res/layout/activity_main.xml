@@ -1,38 +1,41 @@
 <?xml version="1.0" encoding="utf-8"?>
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto" android:id="@+id/bmRoot" android:layout_width="match_parent" android:layout_height="match_parent" android:background="@color/bm_black">
-    <FrameLayout android:id="@+id/previewArea" android:layout_width="match_parent" android:layout_height="match_parent" android:background="@color/bm_black" android:paddingTop="88dp" android:paddingBottom="238dp">
+    <FrameLayout android:id="@+id/previewArea" android:layout_width="match_parent" android:layout_height="match_parent">
         <FrameLayout android:id="@+id/previewFrame" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_gravity="center">
             <com.example.camara.AutoFitTextureView android:id="@+id/textureView" android:layout_width="match_parent" android:layout_height="match_parent" />
             <com.example.camara.BmOverlayView android:id="@+id/bmOverlay" android:layout_width="match_parent" android:layout_height="match_parent" />
             <com.example.camara.BmFocusBoxView android:id="@+id/bmFocusBox" android:layout_width="match_parent" android:layout_height="match_parent" />
-            <com.example.camara.BmStoragePanel android:id="@+id/bmStorage" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="bottom|start" android:layout_marginStart="12dp" android:layout_marginBottom="12dp" />
+            <com.example.camara.BmStoragePanel android:id="@+id/bmStorage" android:layout_width="wrap_content" android:layout_height="wrap_content" android:visibility="gone" />
         </FrameLayout>
-        <ImageView android:id="@+id/bmStabilizer" android:layout_width="32dp" android:layout_height="32dp" android:layout_gravity="top|start" android:layout_marginStart="16dp" android:layout_marginTop="102dp" android:background="@drawable/bm_header_panel" android:contentDescription="@string/bm_stabilizer" android:padding="7dp" android:src="@drawable/ic_bm_stabilizer" />
-        <com.example.camara.BmLensPills android:id="@+id/bmLensPills" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="top|center_horizontal" android:layout_marginTop="96dp" />
-        <com.example.camara.BmToolBar android:id="@+id/bmToolRail" android:layout_width="84dp" android:layout_height="wrap_content" android:layout_gravity="start|center_vertical" android:layout_marginStart="22dp" android:visibility="gone" app:bmVertical="true" />
-        <com.example.camara.BmRailHandle android:id="@+id/bmRailHandle" android:layout_width="14dp" android:layout_height="46dp" android:layout_gravity="start|center_vertical" android:layout_marginStart="3dp" />
-        <com.example.camara.BmRailHandle android:id="@+id/bmRailHandleRight" android:layout_width="14dp" android:layout_height="46dp" android:layout_gravity="end|center_vertical" android:layout_marginEnd="3dp" />
     </FrameLayout>
-    <LinearLayout android:id="@+id/topContainer" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_gravity="top" android:layout_marginStart="12dp" android:layout_marginEnd="12dp" android:background="@drawable/photon_pill" android:elevation="8dp" android:orientation="vertical">
-        <com.example.camara.BmHeaderBar android:id="@+id/bmHeader" android:layout_width="match_parent" android:layout_height="36dp" />
-        <com.example.camara.BmTopBar android:id="@+id/bmTopBar" android:layout_width="match_parent" android:layout_height="wrap_content" />
-        <TextView android:id="@+id/highSpeedBadge" android:layout_width="wrap_content" android:layout_height="28dp" android:layout_gravity="end" android:layout_marginEnd="12dp" android:gravity="center" android:text="HS 120 / 240" android:textColor="@color/ui_accent" android:textSize="11sp" android:textStyle="bold" />
+
+    <LinearLayout android:id="@+id/topContainer" android:layout_width="wrap_content" android:layout_height="48dp" android:layout_gravity="top|end" android:layout_marginTop="48dp" android:layout_marginEnd="16dp" android:background="@drawable/photon_pill" android:gravity="center" android:paddingStart="6dp" android:paddingEnd="6dp">
+        <ImageButton android:id="@+id/photonFlash" android:layout_width="40dp" android:layout_height="40dp" android:background="@android:color/transparent" android:contentDescription="Flash" android:src="@drawable/ic_flash_off" android:tint="@color/photon_on_surface" />
+        <ImageButton android:id="@+id/photonGrid" android:layout_width="40dp" android:layout_height="40dp" android:background="@android:color/transparent" android:contentDescription="Grid" android:src="@drawable/ic_grid_toggle" android:tint="@color/photon_on_surface" />
+        <ImageButton android:id="@+id/photonSettings" android:layout_width="40dp" android:layout_height="40dp" android:background="@android:color/transparent" android:contentDescription="Settings" android:src="@drawable/ic_settings" android:tint="@color/photon_on_surface" />
+        <com.example.camara.BmHeaderBar android:id="@+id/bmHeader" android:layout_width="1dp" android:layout_height="1dp" android:visibility="gone" />
+        <com.example.camara.BmTopBar android:id="@+id/bmTopBar" android:layout_width="1dp" android:layout_height="1dp" android:visibility="gone" />
     </LinearLayout>
-    <LinearLayout android:id="@+id/bottomContainer" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_gravity="bottom" android:layout_marginStart="10dp" android:layout_marginEnd="10dp" android:layout_marginBottom="54dp" android:background="@drawable/photon_pill" android:elevation="10dp" android:orientation="vertical" android:paddingTop="6dp" android:paddingBottom="8dp">
-        <LinearLayout android:id="@+id/panelRow" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical" android:orientation="horizontal">
-            <com.example.camara.BmHistogramView android:id="@+id/bmHistogram" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginStart="12dp" />
-            <Space android:layout_width="0dp" android:layout_height="1dp" android:layout_weight="1" />
-            <com.example.camara.BmStereoMetersView android:id="@+id/bmStereoMeters" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_marginEnd="12dp" />
-        </LinearLayout>
-        <LinearLayout android:id="@+id/photonManualStrip" android:layout_width="match_parent" android:layout_height="52dp" android:layout_marginStart="8dp" android:layout_marginEnd="8dp" android:gravity="center" android:orientation="horizontal" android:padding="3dp">
-            <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:background="@drawable/photon_manual_option" android:gravity="center" android:text="ISO\n800" android:textColor="@color/photon_on_surface" android:textSize="11sp" android:textStyle="bold" />
-            <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_marginStart="4dp" android:layout_weight="1" android:background="@drawable/photon_manual_option" android:gravity="center" android:text="SHUTTER\n1/50" android:textColor="@color/photon_on_surface" android:textSize="11sp" android:textStyle="bold" />
-            <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_marginStart="4dp" android:layout_weight="1" android:background="@drawable/photon_manual_option" android:gravity="center" android:text="WB\nAUTO" android:textColor="@color/photon_on_surface" android:textSize="11sp" android:textStyle="bold" />
-            <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_marginStart="4dp" android:layout_weight="1" android:background="@drawable/photon_manual_option" android:gravity="center" android:text="FOCUS\nAF" android:textColor="@color/photon_on_surface" android:textSize="11sp" android:textStyle="bold" />
-        </LinearLayout>
-        <com.example.camara.BmResolutionChips android:id="@+id/bmResolutionChips" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="4dp" />
-        <com.example.camara.BmBottomBar android:id="@+id/bmBottomBar" android:layout_width="match_parent" android:layout_height="wrap_content" />
+
+    <com.example.camara.BmLensPills android:id="@+id/bmLensPills" android:layout_width="wrap_content" android:layout_height="wrap_content" android:layout_gravity="bottom|center_horizontal" android:layout_marginBottom="164dp" />
+
+    <LinearLayout android:id="@+id/photonManualStrip" android:layout_width="match_parent" android:layout_height="56dp" android:layout_gravity="bottom" android:layout_marginStart="24dp" android:layout_marginEnd="24dp" android:layout_marginBottom="96dp" android:background="@drawable/photon_pill" android:gravity="center" android:padding="4dp">
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:background="@drawable/photon_manual_option" android:gravity="center" android:text="ISO" android:textColor="@color/photon_on_surface" android:textSize="11sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_marginStart="4dp" android:layout_weight="1" android:background="@drawable/photon_manual_option" android:gravity="center" android:text="SHUTTER" android:textColor="@color/photon_on_surface" android:textSize="11sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_marginStart="4dp" android:layout_weight="1" android:background="@drawable/photon_manual_option" android:gravity="center" android:text="WB" android:textColor="@color/photon_on_surface" android:textSize="11sp" />
+        <TextView android:layout_width="0dp" android:layout_height="match_parent" android:layout_marginStart="4dp" android:layout_weight="1" android:background="@drawable/photon_manual_option" android:gravity="center" android:text="FOCUS" android:textColor="@color/photon_on_surface" android:textSize="11sp" />
     </LinearLayout>
-    <com.example.camara.BmBottomNav android:id="@+id/bmBottomNav" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_gravity="bottom" />
-    <com.example.camara.BmCenterDial android:id="@+id/bmCenterDial" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_gravity="bottom|center_horizontal" />
+
+    <com.example.camara.BmBottomBar android:id="@+id/bmBottomBar" android:layout_width="1dp" android:layout_height="1dp" android:visibility="gone" />
+    <com.example.camara.BmBottomNav android:id="@+id/bmBottomNav" android:layout_width="1dp" android:layout_height="1dp" android:visibility="gone" />
+    <com.example.camara.BmHistogramView android:id="@+id/bmHistogram" android:layout_width="1dp" android:layout_height="1dp" android:visibility="gone" />
+    <com.example.camara.BmStereoMetersView android:id="@+id/bmStereoMeters" android:layout_width="1dp" android:layout_height="1dp" android:visibility="gone" />
+    <com.example.camara.BmResolutionChips android:id="@+id/bmResolutionChips" android:layout_width="1dp" android:layout_height="1dp" android:visibility="gone" />
+    <com.example.camara.BmToolBar android:id="@+id/bmToolRail" android:layout_width="1dp" android:layout_height="1dp" android:visibility="gone" />
+    <com.example.camara.BmRailHandle android:id="@+id/bmRailHandle" android:layout_width="1dp" android:layout_height="1dp" android:visibility="gone" />
+    <com.example.camara.BmRailHandle android:id="@+id/bmRailHandleRight" android:layout_width="1dp" android:layout_height="1dp" android:visibility="gone" />
+    <ImageView android:id="@+id/bmStabilizer" android:layout_width="1dp" android:layout_height="1dp" android:visibility="gone" />
+    <LinearLayout android:id="@+id/panelRow" android:layout_width="1dp" android:layout_height="1dp" android:visibility="gone" />
+    <LinearLayout android:id="@+id/bottomContainer" android:layout_width="1dp" android:layout_height="1dp" android:visibility="gone" />
+    <com.example.camara.BmCenterDial android:id="@+id/bmCenterDial" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_gravity="bottom" android:visibility="gone" />
 </FrameLayout>
