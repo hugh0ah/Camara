@@ -175,7 +175,7 @@ class MainActivity : AppCompatActivity() {
     private var cameraManager: CameraManager? = null
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
-    private var diagnosticFrameLogged = false
+    private var diagnosticFrameCount = 0L
     private var requestBuilder: CaptureRequest.Builder? = null
     private var previewSurface: Surface? = null
     private var characteristics: CameraCharacteristics? = null
@@ -1736,9 +1736,9 @@ class MainActivity : AppCompatActivity() {
             request: CaptureRequest,
             result: TotalCaptureResult
         ) {
-            if (!diagnosticFrameLogged) {
-                diagnosticFrameLogged = true
-                Log.i(TAG_CAMERA, "DIAG onCaptureCompleted frame=${result.frameNumber}")
+            diagnosticFrameCount++
+            if (diagnosticFrameCount <= 3 || diagnosticFrameCount % 30L == 0L) {
+                Log.i(TAG_CAMERA, "DIAG onCaptureCompleted count=$diagnosticFrameCount frame=${result.frameNumber}")
             }
             val appliedIso = result.get(CaptureResult.SENSOR_SENSITIVITY)
             val appliedExposure = result.get(CaptureResult.SENSOR_EXPOSURE_TIME)
