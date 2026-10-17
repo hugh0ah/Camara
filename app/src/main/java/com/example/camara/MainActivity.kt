@@ -33,6 +33,7 @@ import android.util.Size
 import android.view.MotionEvent
 import android.view.OrientationEventListener
 import android.view.Surface
+import android.view.ScaleGestureDetector
 import android.view.TextureView
 import android.view.View
 import android.widget.FrameLayout
@@ -69,6 +70,7 @@ class MainActivity : AppCompatActivity() {
         const val PHYSICAL_MAIN = "2"
         const val PHYSICAL_TELE = "3"
         const val PHYSICAL_UW = "4"
+        const val PHYSICAL_FRONT = "1"
         const val FOUR_K_BITRATE = 120_000_000
 
         /** Tamaño de búfer de previsualización, fijo para no reiniciar la sesión. */
@@ -112,6 +114,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var previewArea: FrameLayout
     private lateinit var previewFrame: FrameLayout
     private lateinit var bottomContainer: LinearLayout
+    private lateinit var zoomDetector: ScaleGestureDetector
 
     /** Tamaño real del stream de previsualización (define la relación de aspecto). */
     private var previewSize: Size = Size(1920, 1080)
@@ -177,6 +180,8 @@ class MainActivity : AppCompatActivity() {
 
     private val supportedPhysicalIds = mutableSetOf<String>()
     private var activePhysicalId: String? = null
+    private var activeCameraId: String = LOGICAL_CAMERA_ID
+    private val availableCameraIds = mutableSetOf<String>()
     private var availableFpsRanges: List<Range<Int>> = emptyList()
     private var contrastCurveSupported = false
     private var isoStops: IntArray = BmSettings.ISO_STOPS
@@ -321,6 +326,7 @@ class MainActivity : AppCompatActivity() {
             placeFloatingControls()
         }
         previewFrame.setOnTouchListener { view, event ->
+            if (zoomDetector.onTouchEvent(event)) return@setOnTouchListener true
             if (event.actionMasked == MotionEvent.ACTION_UP && view.width > 0 && view.height > 0) {
                 val nx = event.x / view.width
                 val ny = event.y / view.height
@@ -330,6 +336,17 @@ class MainActivity : AppCompatActivity() {
             }
             true
         }
+
+        zoomDetector = ScaleGestureDetector(this, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            override fun onScale(detector: ScaleGestureDetector): Boolean {
+                if (isRecording || settings.lensKey == BmSettings.LENS_FRONT) return true
+                settings.zoomRatio = (settings.zoomRatio * detector.scaleFactor).coerceIn(0.6f, 10.0f)
+                updateParameterDisplay()
+                pushSettings()
+                autoLensForZoom()
+                return true
+            }
+        })
 
         videoRecorder = VideoRecorder(this)
         stereoMeters.reset()
@@ -948,6 +965,7 @@ class MainActivity : AppCompatActivity() {
         if (supportedPhysicalIds.contains(PHYSICAL_MAIN)) labels += BmSettings.LENS_MAIN
         if (supportedPhysicalIds.contains(PHYSICAL_TELE)) labels += BmSettings.LENS_TELE
         if (supportedPhysicalIds.contains(PHYSICAL_UW)) labels += BmSettings.LENS_UW
+        if (availableCameraIds.contains(PHYSICAL_FRONT)) labels += BmSettings.LENS_FRONT
         labels += BmSettings.LENS_LOGICAL
         return labels
     }
@@ -958,6 +976,7 @@ class MainActivity : AppCompatActivity() {
         if (supportedPhysicalIds.contains(PHYSICAL_UW)) physical += BmLensPills.LENS_UW
         if (supportedPhysicalIds.contains(PHYSICAL_MAIN)) physical += BmLensPills.LENS_MAIN
         if (supportedPhysicalIds.contains(PHYSICAL_TELE)) physical += BmLensPills.LENS_TELE
+        if (availableCameraIds.contains(PHYSICAL_FRONT)) physical += BmLensPills.LENS_FRONT
         if (lensPills.childCount == 0) {
             lensPills.setAvailableLenses(physical, supportsFps(60))
         }
@@ -1344,7 +1363,7 @@ class MainActivity : AppCompatActivity() {
     private fun openCameraInternal() {
         val manager = cameraManager ?: return
         probeCapabilities(manager)
-        val cameraId = if (manager.getCameraIdList().contains(LOGICAL_CAMERA_ID)) LOGICAL_CAMERA_ID
+        val cameraId = if (manager.getCameraIdList().contains(activeCameraId)) activeCameraId
         else manager.getCameraIdList().firstOrNull() ?: return
         try {
             manager.openCamera(cameraId, object : CameraDevice.StateCallback() {
@@ -1375,6 +1394,8 @@ class MainActivity : AppCompatActivity() {
     private fun probeCapabilities(manager: CameraManager) {
         try {
             val ids = manager.getCameraIdList()
+            availableCameraIds.clear()
+            availableCameraIds += ids
             Log.i(TAG_CAMERA, "PROBE cámaras disponibles: ${ids.joinToString()}")
             ids.forEach { id ->
                 val chars = manager.getCameraCharacteristics(id)
@@ -1481,6 +1502,11 @@ class MainActivity : AppCompatActivity() {
                             "gainRange=${BmSettings.gainMin}..${BmSettings.gainMax}"
                     )
                 }
+            }
+            if (activeCameraId != LOGICAL_CAMERA_ID && ids.contains(activeCameraId)) {
+                characteristics = manager.getCameraCharacteristics(activeCameraId)
+                zoomRatioSupported = characteristics?.keys?.any { it.name == "CONTROL_ZOOM_RATIO" } == true
+                Log.i(TAG_CAMERA, "PROBE cámara activa independiente=$activeCameraId zoomRatio=$zoomRatioSupported")
             }
         } catch (t: Throwable) {
             Log.e(TAG_CAMERA, "PROBE falló: ${t.message}")
@@ -1713,6 +1739,8 @@ class MainActivity : AppCompatActivity() {
         )
         // Zoom suave por ratio, si el HAL lo publica.
         if (zoomRatioSupported) {
+            // CONTROL_ZOOM_RATIO no admite valores inferiores a 1.0. El UW se
+            // selecciona físicamente para 0.6x..0.99x y el ratio queda en 1.0.
             builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, settings.zoomRatio.coerceAtLeast(1.0f))
         }
         // Balance de blancos: AWB nativo del ISP (insignia «A») o ganancias RGGB
@@ -1862,25 +1890,50 @@ class MainActivity : AppCompatActivity() {
         settings.lensKey = label
         centerDial.hide()
         topBar.setActive("")
+        activeCameraId = if (label == BmSettings.LENS_FRONT) PHYSICAL_FRONT else LOGICAL_CAMERA_ID
         activePhysicalId = when (label) {
             BmSettings.LENS_MAIN -> PHYSICAL_MAIN.takeIf { supportedPhysicalIds.contains(it) }
             BmSettings.LENS_TELE -> PHYSICAL_TELE.takeIf { supportedPhysicalIds.contains(it) }
             BmSettings.LENS_UW -> PHYSICAL_UW.takeIf { supportedPhysicalIds.contains(it) }
+            BmSettings.LENS_FRONT -> null
             else -> null
         }
         if (label == BmSettings.LENS_LOGICAL) settings.fps = 60
         Log.i(TAG_CAMERA, "Lente -> $label physical=$activePhysicalId fps=${settings.fps}")
-        captureSession?.let {
+        updateParameterDisplay()
+        cameraHandler.post {
             try {
-                it.stopRepeating()
-                it.close()
+                captureSession?.stopRepeating()
+                captureSession?.close()
             } catch (t: Throwable) {
                 Log.w(TAG_CAMERA, "close sesión previa: ${t.message}")
             }
+            captureSession = null
+            if (activeCameraId != LOGICAL_CAMERA_ID) {
+                cameraDevice?.close()
+                cameraDevice = null
+                openCameraInternal()
+            } else {
+                createSessionInternal(null)
+            }
         }
-        captureSession = null
-        updateParameterDisplay()
-        createSession(null)
+    }
+
+    /** Conmutación de lente basada en el ratio solicitado, serializada en cámara. */
+    private fun autoLensForZoom() {
+        if (settings.lensKey == BmSettings.LENS_FRONT || isRecording) return
+        val target = when {
+            settings.zoomRatio < 1.0f -> BmSettings.LENS_UW
+            settings.zoomRatio < 3.0f -> BmSettings.LENS_MAIN
+            else -> BmSettings.LENS_TELE
+        }
+        if (settings.lensKey != target && supportedPhysicalIds.contains(
+                when (target) {
+                    BmSettings.LENS_UW -> PHYSICAL_UW
+                    BmSettings.LENS_MAIN -> PHYSICAL_MAIN
+                    else -> PHYSICAL_TELE
+                }
+            )) selectLens(target)
     }
 
     private fun updateParameterDisplay() {

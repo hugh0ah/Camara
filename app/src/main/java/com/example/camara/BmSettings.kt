@@ -423,6 +423,7 @@ class BmSettings {
         const val LENS_TELE = "TELE"
         const val LENS_UW = "UW"
         const val LENS_LOGICAL = "LOG"
+        const val LENS_FRONT = "FRONT"
 
         /** Escala de obturación de cine, de 1/24 a 1/8000. */
         val SUTTER_STOPS: LongArray = longArrayOf(

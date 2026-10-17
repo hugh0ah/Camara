@@ -31,6 +31,7 @@ class BmLensPills @JvmOverloads constructor(
         const val LENS_MAIN = "1x"
         const val LENS_TELE = "TELE"
         const val LENS_LOGICAL = "LOG"
+        const val LENS_FRONT = "FRONT"
 
         private const val COLOR_ACTIVE = 0xFFFFFFFF.toInt()
         private const val COLOR_IDLE = 0xE6FFFFFF.toInt()
@@ -58,7 +59,7 @@ class BmLensPills @JvmOverloads constructor(
     fun setAvailableLenses(availableLenses: List<String>, grouped60fps: Boolean) {
         removeAllViews()
         pills.clear()
-        val order = listOf(LENS_UW to "0.6x UW", LENS_MAIN to "1x", LENS_TELE to "3x TELE")
+        val order = listOf(LENS_UW to "0.6x UW", LENS_MAIN to "1x", LENS_TELE to "3x TELE", LENS_FRONT to "FRONT")
         order.forEach { (key, label) ->
             if (availableLenses.contains(key)) addPill(key, label)
         }
