@@ -175,6 +175,7 @@ class MainActivity : AppCompatActivity() {
     private var cameraManager: CameraManager? = null
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
+    private var diagnosticFrameLogged = false
     private var requestBuilder: CaptureRequest.Builder? = null
     private var previewSurface: Surface? = null
     private var characteristics: CameraCharacteristics? = null
@@ -356,6 +357,7 @@ class MainActivity : AppCompatActivity() {
 
         textureView.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
             override fun onSurfaceTextureAvailable(surface: SurfaceTexture, width: Int, height: Int) {
+                Log.i(TAG_CAMERA, "DIAG onSurfaceTextureAvailable ${width}x${height} cameraDevice=${cameraDevice != null} captureSession=${captureSession != null}")
                 surface.setDefaultBufferSize(previewSize.width, previewSize.height)
                 previewArea.post { applyPreviewAspect() }
                 // La superficie puede ser NUEVA (primer arranque, o vuelta del
@@ -364,7 +366,14 @@ class MainActivity : AppCompatActivity() {
                 // sesión sigue escribiendo al Surface muerto y el visor se queda
                 // negro para siempre, porque openCamera() ya no puede reabrir un
                 // dispositivo que sigue abierto.
-                cameraHandler.post { rebindPreviewSurface(surface) }
+                cameraHandler.post {
+                    if (cameraDevice == null) {
+                        Log.i(TAG_CAMERA, "DIAG onSurfaceTextureAvailable -> openCamera()")
+                        openCameraInternal()
+                    } else {
+                        rebindPreviewSurface(surface)
+                    }
+                }
             }
 
             override fun onSurfaceTextureSizeChanged(surface: SurfaceTexture, width: Int, height: Int) {
@@ -1361,28 +1370,44 @@ class MainActivity : AppCompatActivity() {
 
     /** Abre la cámara en el hilo dedicado, nunca en el de interfaz. */
     private fun openCamera() {
+        Log.i(TAG_CAMERA, "DIAG openCamera() invocado textureAvailable=${textureView.isAvailable} cameraDevice=${cameraDevice != null} captureSession=${captureSession != null}")
         cameraHandler.post { openCameraInternal() }
     }
 
     private fun openCameraInternal() {
-        val manager = cameraManager ?: return
+        val manager = cameraManager ?: run {
+            Log.e(TAG_CAMERA, "DIAG openCameraInternal abortado: cameraManager=null")
+            return
+        }
+        Log.i(TAG_CAMERA, "DIAG openCameraInternal inicio cameraDevice=${cameraDevice != null} captureSession=${captureSession != null} textureAvailable=${textureView.isAvailable}")
+        if (cameraDevice != null) {
+            Log.w(TAG_CAMERA, "DIAG openCameraInternal omitido: cameraDevice ya abierto")
+            return
+        }
         probeCapabilities(manager)
-        val cameraId = if (manager.getCameraIdList().contains(activeCameraId)) activeCameraId
-        else manager.getCameraIdList().firstOrNull() ?: return
+        val cameraId = LOGICAL_CAMERA_ID
+        if (!manager.getCameraIdList().contains(cameraId)) {
+            Log.e(TAG_CAMERA, "DIAG cámara lógica 0 no está disponible")
+            return
+        }
+        Log.i(TAG_CAMERA, "DIAG manager.openCamera($cameraId) enviado")
         try {
             manager.openCamera(cameraId, object : CameraDevice.StateCallback() {
                 override fun onOpened(device: CameraDevice) {
+                    Log.i(TAG_CAMERA, "DIAG onOpened id=${device.id}")
                     cameraDevice = device
-                    createSession(null)
+                    createSessionInternal(null)
                 }
 
                 override fun onDisconnected(device: CameraDevice) {
+                    Log.e(TAG_CAMERA, "DIAG onDisconnected id=${device.id}")
                     device.close()
                     cameraDevice = null
                     captureSession = null
                 }
 
                 override fun onError(device: CameraDevice, error: Int) {
+                    Log.e(TAG_CAMERA, "DIAG onError id=${device.id} error=$error")
                     Log.e(TAG_CAMERA, "CameraDevice error $error")
                     device.close()
                     cameraDevice = null
@@ -1390,7 +1415,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }, cameraHandler)
         } catch (t: Throwable) {
-            Log.e(TAG_CAMERA, "openCamera($cameraId) falló: ${t.message}")
+            Log.e(TAG_CAMERA, "DIAG openCamera($cameraId) excepción: ${t.message}", t)
         }
     }
 
@@ -1540,7 +1565,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun createSessionInternal(recorderSurface: Surface?) {
-        val device = cameraDevice ?: return
+        val device = cameraDevice ?: run {
+            Log.e(TAG_CAMERA, "DIAG createSessionInternal abortado: cameraDevice=null")
+            return
+        }
+        Log.i(TAG_CAMERA, "DIAG createSessionInternal inicio camera=${device.id} textureAvailable=${textureView.isAvailable} previewSurface=${previewSurface != null}")
         // Nunca se crea una sesión sin superficie lista: en MediaTek eso deja el
         // visor en negro hasta reiniciar la cámara.
         if (!textureView.isAvailable) {
@@ -1553,7 +1582,35 @@ class MainActivity : AppCompatActivity() {
         }
         // Se reutiliza el Surface ya enlazado si es el de esta misma textura; sólo
         // se crea uno nuevo cuando no hay ninguno (primer arranque).
-        val surface = previewSurface ?: Surface(texture).also { previewSurface = it }
+        val surface = Surface(texture).also { previewSurface = it }
+        Log.i(TAG_CAMERA, "DIAG createCaptureSession minimal surface=${surface.isValid} size=${previewSize.width}x${previewSize.height}")
+        try {
+            val builder = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
+            builder.addTarget(surface)
+            device.createCaptureSession(
+                listOf(surface),
+                object : CameraCaptureSession.StateCallback() {
+                    override fun onConfigured(session: CameraCaptureSession) {
+                        captureSession = session
+                        Log.i(TAG_CAMERA, "DIAG onConfigured session=${session.javaClass.simpleName}")
+                        try {
+                            session.setRepeatingRequest(builder.build(), captureCallback, cameraHandler)
+                            Log.i(TAG_CAMERA, "DIAG setRepeatingRequest enviado")
+                        } catch (t: Throwable) {
+                            Log.e(TAG_CAMERA, "DIAG setRepeatingRequest excepción: ${t.message}", t)
+                        }
+                    }
+
+                    override fun onConfigureFailed(session: CameraCaptureSession) {
+                        Log.e(TAG_CAMERA, "DIAG onConfigureFailed session=${session.javaClass.simpleName}")
+                    }
+                },
+                cameraHandler
+            )
+        } catch (t: Throwable) {
+            Log.e(TAG_CAMERA, "DIAG createCaptureSession excepción: ${t.message}", t)
+        }
+        return
 
         if (highSpeedRequested) {
             val fps = highSpeedFps
@@ -1679,6 +1736,10 @@ class MainActivity : AppCompatActivity() {
             request: CaptureRequest,
             result: TotalCaptureResult
         ) {
+            if (!diagnosticFrameLogged) {
+                diagnosticFrameLogged = true
+                Log.i(TAG_CAMERA, "DIAG onCaptureCompleted frame=${result.frameNumber}")
+            }
             val appliedIso = result.get(CaptureResult.SENSOR_SENSITIVITY)
             val appliedExposure = result.get(CaptureResult.SENSOR_EXPOSURE_TIME)
             val appliedGains = result.get(CaptureResult.COLOR_CORRECTION_GAINS)
@@ -2469,7 +2530,11 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        if (textureView.isAvailable && cameraDevice == null) openCamera()
+        Log.i(TAG_CAMERA, "DIAG onResume textureAvailable=${textureView.isAvailable} cameraDevice=${cameraDevice != null} captureSession=${captureSession != null}")
+        if (textureView.isAvailable && cameraDevice == null) {
+            Log.i(TAG_CAMERA, "DIAG onResume -> openCamera()")
+            openCamera()
+        }
         if (settings.peaking || settings.zebra || settings.falseColor || settings.histogram) analyzer?.start()
         if (orientationListener.canDetectOrientation()) orientationListener.enable()
     }
