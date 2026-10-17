@@ -8,6 +8,7 @@ import android.graphics.Matrix
 import android.graphics.Rect
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCaptureSession
+import android.hardware.camera2.CameraConstrainedHighSpeedCaptureSession
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraManager
@@ -192,6 +193,8 @@ class MainActivity : AppCompatActivity() {
     /** El HAL publica `CONTROL_ZOOM_RATIO`; si no, se omite el ajuste. */
     private var zoomRatioSupported = false
     private var highSpeedVideoFpsRanges: List<Range<Int>> = emptyList()
+    private var highSpeedRequested = false
+    private var highSpeedFps = 0
 
     /** Escala real que aplicó el último transform del visor, para diagnóstico. */
     private var lastTransformScale = 1f
@@ -426,6 +429,7 @@ class MainActivity : AppCompatActivity() {
         mainHandler.post(commandPoller)
 
         cameraManager = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+        handleControlIntent(intent)
         if (hasCameraPermission()) {
             if (textureView.isAvailable) openCamera()
         } else {
@@ -1551,6 +1555,48 @@ class MainActivity : AppCompatActivity() {
         // se crea uno nuevo cuando no hay ninguno (primer arranque).
         val surface = previewSurface ?: Surface(texture).also { previewSurface = it }
 
+        if (highSpeedRequested) {
+            val fps = highSpeedFps
+            val supported = highSpeedVideoFpsRanges.any { it.lower <= fps && it.upper >= fps }
+            if (!supported) {
+                Log.e(TAG_CAMERA, "High Speed rechazado: el HAL no publica ${fps}fps; rangos=$highSpeedVideoFpsRanges")
+                highSpeedRequested = false
+            } else {
+                try {
+                    device.createConstrainedHighSpeedCaptureSession(
+                        listOf(surface),
+                        object : CameraCaptureSession.StateCallback() {
+                            override fun onConfigured(session: CameraCaptureSession) {
+                                captureSession = session
+                                try {
+                                    val hs = session as CameraConstrainedHighSpeedCaptureSession
+                                    val builder = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD)
+                                    builder.addTarget(surface)
+                                    fillRequest(builder)
+                                    builder.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, Range(fps, fps))
+                                    val requests = hs.createHighSpeedRequestList(builder.build())
+                                    hs.setRepeatingBurst(requests, captureCallback, cameraHandler)
+                                    Log.i(TAG_CAMERA, "High Speed activo: ${previewSize.width}x${previewSize.height} @ ${fps}fps")
+                                } catch (t: Throwable) {
+                                    Log.e(TAG_CAMERA, "High Speed setRepeatingBurst falló: ${t.message}")
+                                }
+                            }
+
+                            override fun onConfigureFailed(session: CameraCaptureSession) {
+                                Log.e(TAG_CAMERA, "Configuración High Speed fallida: ${previewSize.width}x${previewSize.height} @ ${fps}fps")
+                                highSpeedRequested = false
+                            }
+                        },
+                        cameraHandler
+                    )
+                    return
+                } catch (t: Throwable) {
+                    Log.e(TAG_CAMERA, "createConstrainedHighSpeedCaptureSession falló: ${t.message}")
+                    highSpeedRequested = false
+                }
+            }
+        }
+
         val outputs = ArrayList<OutputConfiguration>()
         val previewConfig = OutputConfiguration(surface)
         val recorderConfig = recorderSurface?.let { OutputConfiguration(it) }
@@ -2443,7 +2489,56 @@ class MainActivity : AppCompatActivity() {
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        handleControlIntent(intent)
         intent.getStringExtra("cmd")?.let { command -> handleDebugCommand(command) }
+    }
+
+    /** Puente determinista para pruebas ADB sin gestos multitáctiles. */
+    private fun handleControlIntent(intent: Intent?) {
+        if (intent == null) return
+        var lensChanged = false
+        intent.getStringExtra("lens")?.lowercase(Locale.US)?.let { lens ->
+            when (lens) {
+                "front" -> {
+                    selectLens(BmSettings.LENS_FRONT)
+                    lensChanged = true
+                }
+                "back" -> {
+                    val target = when {
+                        settings.zoomRatio < 1.0f -> BmSettings.LENS_UW
+                        settings.zoomRatio < 3.0f -> BmSettings.LENS_MAIN
+                        else -> BmSettings.LENS_TELE
+                    }
+                    selectLens(target)
+                    lensChanged = true
+                }
+            }
+        }
+        if (intent.hasExtra("zoom")) {
+            val zoom = intent.getFloatExtra("zoom", settings.zoomRatio).coerceIn(0.6f, 10.0f)
+            settings.zoomRatio = zoom
+            updateParameterDisplay()
+            pushSettings()
+            autoLensForZoom()
+            Log.i(TAG_CAMERA, "INTENT zoom=$zoom lens=${settings.lensKey} physical=$activePhysicalId")
+        } else if (lensChanged) {
+            Log.i(TAG_CAMERA, "INTENT lens=${settings.lensKey} physical=$activePhysicalId")
+        }
+        if (intent.hasExtra("highSpeed")) {
+            val fps = intent.getIntExtra("highSpeed", 0)
+            if (fps == 120 || fps == 240) {
+                highSpeedFps = fps
+                highSpeedRequested = true
+                cameraHandler.post {
+                    runCatching { captureSession?.close() }
+                    captureSession = null
+                    if (cameraDevice != null) createSessionInternal(null)
+                }
+                Log.i(TAG_CAMERA, "INTENT High Speed solicitado: ${fps}fps")
+            } else {
+                Log.w(TAG_CAMERA, "INTENT highSpeed ignorado: sólo se admiten 120 o 240fps")
+            }
+        }
     }
 
     override fun onDestroy() {
