@@ -41,6 +41,13 @@
     <color name="ui_text_label">#FFD8DCE2</color>
     <color name="ui_text_muted">#FF9AA2AC</color>
 
+    <!-- PhotonCamera-derived matte surfaces and restrained accent. -->
+    <color name="photon_surface">#FF121212</color>
+    <color name="photon_glass">#80000000</color>
+    <color name="photon_surface_high">#E6262B31</color>
+    <color name="photon_on_surface">#FFF2F2F2</color>
+    <color name="photon_accent">#FFA8C7FA</color>
+
     <!-- Legacy / launcher colors -->
     <color name="purple_200">#FFBB86FC</color>
     <color name="purple_500">#FF6200EE</color>
