@@ -1,0 +1,46 @@
+Camara — third-party source and resource notices
+
+This project is distributed under GNU GPL v3.0. See LICENSE.
+
+PhotonCamera
+Repository: https://github.com/eszdman/PhotonCamera
+Commit: b2eff821a858033515eb2700e7292befecc95225
+License: GNU General Public License v3.0
+Copied/adapted paths currently present in this project:
+- app/src/main/res/drawable/ic_iso.xml
+- app/src/main/res/drawable/ic_iso_selected.xml
+- app/src/main/res/drawable/ic_shutter.xml
+- app/src/main/res/drawable/ic_shutter_selected.xml
+- app/src/main/res/drawable/ic_focus.xml
+- app/src/main/res/drawable/ic_focus_selected.xml
+- app/src/main/res/drawable/ic_exposure.xml
+- app/src/main/res/drawable/ic_saturation.xml
+- app/src/main/res/drawable/manual_control_icon_*.xml
+Changes: copied vector/selector resources and adapted their use to the local minimal Camera2 layout.
+
+FreeDcam
+Repository: https://github.com/KillerInk/FreeDcam
+Commit: 4ce7b6169cbac526df84f2653bc1ecf96abc3d0a
+License: GNU General Public License v2.0
+Referenced/adapted origins in this project:
+- app/src/main/java/com/example/camara/AutoFitTextureView.kt
+- app/src/main/java/com/example/camara/BmSettings.kt
+Changes: local Camera2 view measurement and manual ISO/shutter tables were adapted; no upstream file is vendored verbatim.
+
+Open Camera
+Repository: https://github.com/qbektrix/OpenCamera
+Commit: 92fdfa0b359179f67944474d41d99d1998741534
+License: GNU General Public License v3.0
+No source from Open Camera is currently copied into this project.
+
+GrapheneOS Camera
+Repository: https://github.com/GrapheneOS/Camera
+Commit: fc75d0d5dd574240910ef99b0dfe98e0aadb500f
+License: Apache License 2.0
+No source from GrapheneOS Camera is currently copied into this project.
+
+MotionCam
+Repository used for audit: https://github.com/f0enix/motioncam
+Commit: cc7f7c9cad5234bc939699b1ab1ffbc4bdfd6690
+License: GNU General Public License v3.0
+No MotionCam source is copied; RAW/DNG integration remains unimplemented.
